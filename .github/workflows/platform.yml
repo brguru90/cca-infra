@@ -45,6 +45,16 @@ jobs:
           free -h
           echo "=== inodes ==="
           df -i
+          echo "=== connectivity: github.com (control) ==="
+          curl -sS -o /dev/null -w 'dns:%{time_namelookup}s connect:%{time_connect}s tls:%{time_appconnect}s ttfb:%{time_starttransfer}s total:%{time_total}s http:%{http_code}\n' --max-time 15 https://github.com || echo "FAILED"
+          echo "=== connectivity: release-assets.githubusercontent.com (the CDN failing chart downloads) ==="
+          curl -sS -o /dev/null -w 'dns:%{time_namelookup}s connect:%{time_connect}s tls:%{time_appconnect}s ttfb:%{time_starttransfer}s total:%{time_total}s http:%{http_code}\n' --max-time 15 https://release-assets.githubusercontent.com || echo "FAILED"
+          echo "=== same, forced IPv4 ==="
+          curl -4 -sS -o /dev/null -w 'dns:%{time_namelookup}s connect:%{time_connect}s tls:%{time_appconnect}s ttfb:%{time_starttransfer}s total:%{time_total}s http:%{http_code}\n' --max-time 15 https://release-assets.githubusercontent.com || echo "FAILED (ipv4)"
+          echo "=== same, forced IPv6 ==="
+          curl -6 -sS -o /dev/null -w 'dns:%{time_namelookup}s connect:%{time_connect}s tls:%{time_appconnect}s ttfb:%{time_starttransfer}s total:%{time_total}s http:%{http_code}\n' --max-time 15 https://release-assets.githubusercontent.com || echo "FAILED (ipv6)"
+          echo "=== DNS resolution ==="
+          getent hosts release-assets.githubusercontent.com || echo "resolution failed"
 
       - name: Terraform apply
         # -parallelism=1: root-caused a real failure here to this - Terraform
