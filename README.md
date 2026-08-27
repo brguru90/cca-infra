@@ -4,8 +4,10 @@ Terraform + Kubernetes (K3s) deployment infrastructure for the "cca"
 travel-planner app: `cca_backend` (Go API), `cca_frontend` (Flutter, built to
 an APK), and `cca_admin_frontend` (React admin UI). Deploys to a single home
 Ubuntu 24 server over three environments (`integration`/`uat`/`production`),
-each a Kubernetes namespace, driven entirely by manually-triggered GitHub
-Actions workflows running on a self-hosted runner on that same server.
+each a Kubernetes namespace, driven by GitHub Actions workflows running on a
+self-hosted runner on that same server. `integration` auto-deploys on every
+push to any app repo's `main`; `uat`/`production` are always manually
+triggered from the Actions tab.
 
 ## Start here
 
@@ -39,7 +41,7 @@ docker/               Dockerfiles for cca_backend and cca_admin_frontend
 kubernetes/nginx/     nginx config template for the admin-frontend ConfigMap
 config/               Per-environment .tfvars
 scripts/              Server-side install/ops scripts, run by CI or by hand
-.github/workflows/    deploy | ops | platform | verify
+.github/workflows/    deploy | ops | platform | verify | watch-app-repos
 docs/                 RUNBOOK, SECURITY, AWS_MAPPING
 cca_backend/ cca_frontend/ cca_admin_frontend/   git submodules, reference only - CI always builds their `main`, never the pinned SHA
 ```

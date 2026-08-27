@@ -107,6 +107,18 @@ curl -4 http://<server-ipv4>:3202/
 
 Repeat with `environment=uat` and `environment=production` when ready.
 
+After this first manual run, `integration` deploys itself automatically:
+**CCA Watch App Repos** polls `cca_backend`/`cca_frontend`/`cca_admin_frontend`
+every 5 minutes and re-runs this same deploy whenever any of their `main`
+branches move (see IMPLEMENTATION_PLAN.md §15) - no action needed from you.
+`uat` and `production` are never auto-deployed; always trigger those by hand.
+
+If auto-deploys silently stop happening, check the **CCA Watch App Repos**
+workflow's own run history in the Actions tab first - GitHub disables
+scheduled workflows after 60 days without any repository activity, and it
+needs a manual re-enable (Actions tab → the workflow → "Enable workflow")
+after that.
+
 ## 7. Day-2 operations
 
 Run the **CCA Ops** workflow with `action` = `status` / `stop` / `restart` /

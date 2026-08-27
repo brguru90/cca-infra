@@ -20,6 +20,7 @@ It exists so the *why* behind each file is legible without re-reading both plann
 12. [Explicitly deferred](#12-explicitly-deferred)
 13. [Post-implementation alignment check](#13-post-implementation-alignment-check)
 14. [Video worker correction](#14-video-worker-correction)
+15. [Auto-deploy integration on app repo push](#15-auto-deploy-integration-on-app-repo-push)
 
 ---
 
@@ -86,7 +87,8 @@ cca-infra/
 │   ├── deploy.yml                  ← deploy | rollback
 │   ├── ops.yml                     ← stop | restart | status | scale
 │   ├── platform.yml                ← one-shot: metrics-server check, Mongo operator, Loki/Alloy/Grafana
-│   └── verify.yml                  ← PR checks: terraform validate/fmt, hadolint, actionlint
+│   ├── verify.yml                  ← PR checks: terraform validate/fmt, hadolint, actionlint
+│   └── watch-app-repos.yml         ← polls the 3 app repos' main, auto-deploys integration on change
 ├── docker/
 │   ├── backend/Dockerfile
 │   └── admin-frontend/Dockerfile
@@ -133,6 +135,7 @@ cca-infra/
 - **`scripts/install-k3s.sh`** — dual-stack install flags, `--disable=traefik --disable=servicelb`, `--kube-apiserver-arg=service-node-port-range=3200-4000`, sysctls for IPv6 forwarding, kubeconfig group-readable for the runner user.
 - **`.github/workflows/deploy.yml`** — `prepare` (compute version + per-env ports) → parallel `build-backend` / `build-admin` / `build-flutter` → `deploy-terraform` (needs backend+admin only, **not** flutter — a Gradle flake shouldn't block a prod API deploy) → `post-verify`/`record-release`. Least-privilege permissions, environment-scoped concurrency group shared with `ops.yml`.
 - **`.github/workflows/ops.yml`** — thin shim over `scripts/ops.sh` for `stop`/`restart`/`status`/`scale`; read-only permissions; same concurrency group as `deploy.yml` so ops and deploys serialize per environment.
+- **`.github/workflows/watch-app-repos.yml`** — polls `cca_backend`/`cca_frontend`/`cca_admin_frontend`'s `main` every 5 minutes (self-hosted, matrix per repo, last-seen SHA cached at `/srv/cca/state/watch/<repo>.sha`) and dispatches `deploy.yml` with `action=deploy, environment=integration` when any of them moves — see [§15](#15-auto-deploy-integration-on-app-repo-push).
 - **`docs/SECURITY.md`** — documents (without reproducing secret values) every credential found committed in the three app repos and the compromised Flutter keystore; rotation is the app owner's action, out of scope for this branch.
 - **`kubernetes/nginx/admin-default.conf.tpl`** — includes the `upstream backend_upstream { server backend:8700 max_fails=3 fail_timeout=10s; }` circuit breaker ([§9.1](#9-circuit-breakers)).
 - **`scripts/health-check.sh`** — trips the deployment circuit breaker: on health-check failure, triggers an automatic `terraform apply` back to the recorded previous version instead of leaving a broken deploy live ([§9.2](#9-circuit-breakers)).
@@ -212,3 +215,16 @@ The original implementation pass added an `enable_video_worker`-gated Kubernetes
 One accepted side effect, left as-is: `backend-cron`'s own `VideoStreamGenerationCron` tick still runs every minute regardless (hardcoded in `InitCronJobs()`), and will occasionally still attempt `StartVMInstance()` in production if it observes a queued-but-unstarted video before the CronJob claims it. Verified this fails harmlessly — `compute.NewInstancesRESTClient` errors cleanly with no GCP credentials configured, wrapped and logged, never fatal (`src/my_modules/google_cloud.go`) — so it's occasional log noise, not a functional problem. Suppressing it would require a submodule code change (a new env-gated flag to skip the GCE branch entirely), which hasn't been proposed/confirmed — flagging it here rather than doing it silently.
 
 `backend-cron` remains the only true singleton *server* process (real replica-set/change-stream state); `backend-video` is a singleton-by-`concurrency_policy` batch job; `backend` (api_server) remains the only HPA-scaled, multi-replica workload.
+
+## 15. Auto-deploy integration on app repo push
+
+Requirement: merging to `main` in `cca_backend`/`cca_frontend`/`cca_admin_frontend` should automatically deploy `integration`; `uat`/`production` stay manually triggered from the Actions tab, unchanged.
+
+GitHub Actions has no native way for a workflow in `cca-infra` to react to a push in a *different* repository. The standard fix is push-triggered: add a small workflow to each app repo that fires `repository_dispatch` (or calls `gh workflow run` directly) against `cca-infra` on push to `main`. That requires two things this project avoids unless unavoidable — editing the submodule repos, and a cross-repo PAT secret configured in all three of them.
+
+There's a way that needs neither. All three app repos are public, so their latest `main` commit SHA is readable via the GitHub API with no special access at all. `watch-app-repos.yml` polls each one every 5 minutes (matrix job, self-hosted — it needs no cluster access, but it does need the same GITHUB_TOKEN-based `gh workflow run` capability, and there's no supply-chain reason to prefer a hosted runner for a workflow with zero third-party actions), compares against a last-seen SHA cached at `/srv/cca/state/watch/<repo>.sha`, and dispatches `deploy.yml` with `action=deploy, environment=integration, region=asia-india` when any of them has moved. The SHA file is only updated *after* a successful dispatch, so a failed trigger gets retried on the next poll rather than silently skipped.
+
+Trade-offs accepted:
+- **Up to ~5 minutes of latency** instead of an instant push trigger. Adjust the `cron:` schedule in the workflow file directly if that's too slow — there's no Terraform variable wrapping it, since it's not templated.
+- **Possible double-deploys**: if two app repos both move within the same polling window, two separate `deploy.yml` dispatches fire back-to-back. Harmless — `deploy.yml`'s existing concurrency group serializes them, and the second one just redeploys against the latest `main` of all three repos regardless of which one triggered it. Not worth adding debounce logic for a home-lab integration environment.
+- **GitHub auto-disables scheduled workflows after 60 days of repository inactivity** — a real caveat for a low-traffic personal project; documented in `docs/RUNBOOK.md` as something to check if auto-deploys silently stop.

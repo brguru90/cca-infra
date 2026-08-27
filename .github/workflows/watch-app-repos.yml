@@ -1,0 +1,69 @@
+# Auto-triggers an `integration` deploy whenever cca_backend, cca_frontend,
+# or cca_admin_frontend's `main` branch moves. UAT and production stay
+# manually triggered from the Actions tab (CCA Deploy) by design - this
+# workflow only ever dispatches action=deploy, environment=integration.
+#
+# Deliberately polling rather than repository_dispatch/webhooks: a
+# push-triggered design needs a small notify-on-push workflow (plus a
+# cross-repo PAT secret) added to each of the three app repos, which this
+# project avoids touching unless there's no other way - see
+# IMPLEMENTATION_PLAN.md. All three repos are public, so their latest `main`
+# commit SHA is readable with no special access at all - polling needs
+# nothing from the app repos. Trade-off: up to ~5 minutes of latency instead
+# of an instant trigger; adjust the cron schedule below if that's too slow.
+#
+# Note: GitHub auto-disables scheduled workflows after 60 days with no
+# repository activity - re-enable it from the Actions tab if that happens.
+
+name: CCA Watch App Repos
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  actions: write # required to dispatch deploy.yml via `gh workflow run`
+  contents: read
+
+concurrency:
+  group: cca-watch-app-repos
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: [self-hosted, linux]
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [cca_backend, cca_frontend, cca_admin_frontend]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check ${{ matrix.repo }} main for new commits
+        run: |
+          set -euo pipefail
+          mkdir -p /srv/cca/state/watch
+          state_file="/srv/cca/state/watch/${{ matrix.repo }}.sha"
+
+          latest_sha="$(gh api "repos/brguru90/${{ matrix.repo }}/commits/main" --jq .sha)"
+          last_seen="$(cat "$state_file" 2>/dev/null || true)"
+
+          echo "${{ matrix.repo }}: latest=${latest_sha} last_seen=${last_seen:-<none>}"
+
+          if [[ "$latest_sha" == "$last_seen" ]]; then
+            echo "No change."
+            exit 0
+          fi
+
+          echo "${{ matrix.repo }} moved - triggering an integration deploy."
+          gh workflow run deploy.yml \
+            --repo "${{ github.repository }}" \
+            -f action=deploy \
+            -f environment=integration \
+            -f region=asia-india
+
+          # Record only after a successful dispatch - if `gh workflow run`
+          # fails, the next poll retries this same commit rather than
+          # silently skipping it.
+          echo -n "$latest_sha" > "$state_file"
