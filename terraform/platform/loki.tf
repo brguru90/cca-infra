@@ -76,9 +76,17 @@ resource "helm_release" "loki" {
       resultsCache = { enabled = false }
       lokiCanary   = { enabled = false }
       test         = { enabled = false }
-      backend      = { enabled = false }
-      read         = { enabled = false }
-      write        = { enabled = false }
+
+      # `enabled = false` alone is NOT enough for the SimpleScalable targets:
+      # the chart's own templates/validate.yaml checks `replicas` directly,
+      # independent of `enabled`, and errors ("You have more than zero
+      # replicas configured for both the monolithic and simple scalable
+      # targets") if these still carry their chart-default replicas (3) while
+      # deploymentMode is Monolithic. Learned this the hard way against the
+      # real cluster - `enabled: false` was silently insufficient on its own.
+      backend = { enabled = false, replicas = 0 }
+      read    = { enabled = false, replicas = 0 }
+      write   = { enabled = false, replicas = 0 }
     })
   ]
 
