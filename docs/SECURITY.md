@@ -1,11 +1,15 @@
 # Security findings (out of scope to fix here)
 
-This branch only builds `cca-infra`. It does **not** modify `cca_backend`,
-`cca_frontend`, or `cca_admin_frontend` - those are the app owner's repos and
-credential rotation there is their call to make and execute, not something
-to do silently as a side effect of an infra PR. This document exists so the
-findings aren't lost, and lists concrete rotation steps for when you're
-ready to act on them. Nothing below reproduces an actual secret value.
+This branch only builds `cca-infra`. It does **not** modify application
+source in `cca_backend`, `cca_frontend`, or `cca_admin_frontend` - those are
+the app owner's repos and credential rotation there is their call to make
+and execute, not something to do silently as a side effect of an infra PR.
+(The one exception, added with explicit confirmation, is a single additive
+CI file - `.github/workflows/notify-cca-infra.yml` - pushed to all three for
+push-triggered auto-deploy; see IMPLEMENTATION_PLAN.md §15. It touches no
+application code or secrets.) This document exists so the findings aren't
+lost, and lists concrete rotation steps for when you're ready to act on
+them. Nothing below reproduces an actual secret value.
 
 ## `cca_backend`
 
@@ -17,6 +21,13 @@ Firebase project identifiers, and Razorpay API keys (test-mode, `rzp_test_*`
 - lower risk than live keys, but still shouldn't be hardcoded). `/system_env.sh`
 additionally contains a live `MONGO_CUSTOM_URL` with embedded Atlas
 credentials, plus its own JWT and Razorpay values.
+
+Separately: pushing to this repo's `main` (to add the notify workflow above)
+surfaced a GitHub Dependabot alert - 32 vulnerabilities on its default
+branch (10 critical, 8 high, 13 moderate, 1 low) as of this writing. Not
+investigated or fixed here (dependency remediation in `cca_backend` is
+application work, not infra), but worth acting on before this ships real
+user data - see `https://github.com/brguru90/cca_backend/security/dependabot`.
 
 Also tracked in git: `/env/.env`, `/env/.env_prod`, and
 `/env/cca-vijayapura-firebase-adminsdk-ghz2d-1f8e7ad071.json` - the last one

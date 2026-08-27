@@ -1,10 +1,23 @@
-# Manual deploy/rollback pipeline. Runs entirely on the self-hosted runner on
-# the home server (outbound-only connection to GitHub - no inbound SSH, no
+# Deploy/rollback pipeline. Runs entirely on the self-hosted runner on the
+# home server (outbound-only connection to GitHub - no inbound SSH, no
 # exposed Kubernetes API, see IMPLEMENTATION_PLAN.md). Third-party actions
 # are kept to a minimum and pinned to commit SHAs: this runner holds
 # cluster-admin kubeconfig access and the Docker socket, so a compromised
 # marketplace action here is a much bigger blast radius than on a
 # GitHub-hosted runner.
+#
+# Two ways to trigger this:
+#   - workflow_dispatch: manual, from the Actions tab. Any action/environment.
+#   - repository_dispatch (event_type: app-push): fired by a small workflow
+#     in cca_backend/cca_frontend/cca_admin_frontend on push to their main
+#     branch (see IMPLEMENTATION_PLAN.md Sec 15). ALWAYS resolves to
+#     action=deploy, environment=integration, region=asia-india, regardless
+#     of client_payload contents - uat/production are never auto-deployed.
+#
+# `inputs.*` is only populated for workflow_dispatch runs - every job below
+# reads action/environment/region from `needs.prepare.outputs.*` instead,
+# which `prepare` resolves once with an `inputs.x || '<default>'` fallback so
+# both trigger types produce the same values downstream.
 #
 # Job graph:
 #   prepare -> build-backend  \
@@ -15,7 +28,8 @@
 #                                        and record-release picks up whatever
 #                                        artifacts exist)
 #
-# For `action: rollback`, build-backend/build-admin/build-flutter are all
+# For `action: rollback` (workflow_dispatch only - repository_dispatch never
+# resolves to rollback), build-backend/build-admin/build-flutter are all
 # skipped - prepare resolves the target version's image tags from its
 # recorded manifest.json instead of building anything new.
 
@@ -49,6 +63,8 @@ on:
         required: false
         type: boolean
         default: false
+  repository_dispatch:
+    types: [app-push]
 
 permissions:
   contents: write
@@ -56,14 +72,21 @@ permissions:
 
 concurrency:
   # Shared with ops.yml's group string on purpose - serializes deploys and
-  # day-2 ops (stop/restart/scale) against the same environment.
-  group: cca-${{ inputs.region }}-${{ inputs.environment }}
+  # day-2 ops (stop/restart/scale) against the same environment. Falls back
+  # to asia-india/integration for repository_dispatch runs, where
+  # inputs.region/inputs.environment are unset - matching what a manual
+  # environment=integration run resolves to, so both trigger types
+  # correctly serialize against each other instead of racing.
+  group: cca-${{ inputs.region || 'asia-india' }}-${{ inputs.environment || 'integration' }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     runs-on: [self-hosted, linux]
     outputs:
+      action: ${{ steps.resolve.outputs.action }}
+      environment: ${{ steps.resolve.outputs.environment }}
+      region: ${{ steps.resolve.outputs.region }}
       version: ${{ steps.resolve.outputs.version }}
       namespace: ${{ steps.resolve.outputs.namespace }}
       backend_port: ${{ steps.resolve.outputs.backend_port }}
@@ -75,14 +98,22 @@ jobs:
         with:
           submodules: false # CI always builds each app repo's own `main`, never the pinned submodule SHA - see IMPLEMENTATION_PLAN.md
 
-      - name: Resolve version, ports, and image tags
+      - name: Resolve action/environment/region, version, ports, and image tags
         id: resolve
         env:
-          ACTION: ${{ inputs.action }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          # repository_dispatch runs never populate `inputs` at all - these
+          # fallbacks are what makes an app-repo push behave exactly like a
+          # manual `action=deploy, environment=integration` run.
+          ACTION: ${{ inputs.action || 'deploy' }}
+          ENVIRONMENT: ${{ inputs.environment || 'integration' }}
+          REGION: ${{ inputs.region || 'asia-india' }}
           ROLLBACK_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+
+          echo "action=${ACTION}" >> "$GITHUB_OUTPUT"
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "region=${REGION}" >> "$GITHUB_OUTPUT"
 
           case "$ENVIRONMENT" in
             integration) BACKEND_PORT=3211; ADMIN_PORT=3202 ;;
@@ -129,9 +160,9 @@ jobs:
 
   build-backend:
     needs: prepare
-    if: inputs.action == 'deploy'
+    if: needs.prepare.outputs.action == 'deploy'
     runs-on: [self-hosted, linux]
-    environment: ${{ inputs.environment }}
+    environment: ${{ needs.prepare.outputs.environment }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -151,17 +182,17 @@ jobs:
           docker build \
             --build-arg "APP_VERSION=${{ needs.prepare.outputs.version }}" \
             --tag "${{ needs.prepare.outputs.backend_image }}" \
-            --tag "ghcr.io/brguru90/cca-backend:${{ inputs.environment }}-latest" \
+            --tag "ghcr.io/brguru90/cca-backend:${{ needs.prepare.outputs.environment }}-latest" \
             --file docker/backend/Dockerfile \
             sources/cca_backend
           docker push "${{ needs.prepare.outputs.backend_image }}"
-          docker push "ghcr.io/brguru90/cca-backend:${{ inputs.environment }}-latest"
+          docker push "ghcr.io/brguru90/cca-backend:${{ needs.prepare.outputs.environment }}-latest"
 
   build-admin:
     needs: prepare
-    if: inputs.action == 'deploy'
+    if: needs.prepare.outputs.action == 'deploy'
     runs-on: [self-hosted, linux]
-    environment: ${{ inputs.environment }}
+    environment: ${{ needs.prepare.outputs.environment }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -180,17 +211,17 @@ jobs:
           set -euo pipefail
           docker build \
             --tag "${{ needs.prepare.outputs.admin_image }}" \
-            --tag "ghcr.io/brguru90/cca-admin-frontend:${{ inputs.environment }}-latest" \
+            --tag "ghcr.io/brguru90/cca-admin-frontend:${{ needs.prepare.outputs.environment }}-latest" \
             --file docker/admin-frontend/Dockerfile \
             sources/cca_admin_frontend
           docker push "${{ needs.prepare.outputs.admin_image }}"
-          docker push "ghcr.io/brguru90/cca-admin-frontend:${{ inputs.environment }}-latest"
+          docker push "ghcr.io/brguru90/cca-admin-frontend:${{ needs.prepare.outputs.environment }}-latest"
 
   build-flutter:
     needs: prepare
-    if: inputs.action == 'deploy' && !inputs.skip_flutter
+    if: needs.prepare.outputs.action == 'deploy' && !inputs.skip_flutter
     runs-on: [self-hosted, linux]
-    environment: ${{ inputs.environment }}
+    environment: ${{ needs.prepare.outputs.environment }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -262,8 +293,8 @@ jobs:
 
           jq -n \
             --arg v "$VERSION" \
-            --arg env "${{ inputs.environment }}" \
-            --arg region "${{ inputs.region }}" \
+            --arg env "${{ needs.prepare.outputs.environment }}" \
+            --arg region "${{ needs.prepare.outputs.region }}" \
             --arg flutter_sha "$(git rev-parse HEAD)" \
             --arg api "http://travel-planner.ddns.net:${{ needs.prepare.outputs.backend_port }}" \
             '{deployment:$v, environment:$env, region:$region, flutter:$flutter_sha, api:$api}' \
@@ -280,14 +311,15 @@ jobs:
     if: |
       always() &&
       needs.prepare.result == 'success' &&
-      (inputs.action == 'rollback' || (needs.build-backend.result == 'success' && needs.build-admin.result == 'success'))
+      (needs.prepare.outputs.action == 'rollback' || (needs.build-backend.result == 'success' && needs.build-admin.result == 'success'))
     runs-on: [self-hosted, linux]
-    environment: ${{ inputs.environment }}
+    environment: ${{ needs.prepare.outputs.environment }}
     env:
       TF_IN_AUTOMATION: "1"
       TF_INPUT: "0"
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      ENVIRONMENT: ${{ inputs.environment }}
+      ACTION: ${{ needs.prepare.outputs.action }}
+      ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
       NAMESPACE: ${{ needs.prepare.outputs.namespace }}
       VERSION: ${{ needs.prepare.outputs.version }}
       BACKEND_IMAGE: ${{ needs.prepare.outputs.backend_image }}
@@ -296,7 +328,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Rotate .current -> .previous (deploy only)
-        if: inputs.action == 'deploy'
+        if: needs.prepare.outputs.action == 'deploy'
         run: |
           set -euo pipefail
           mkdir -p /srv/cca/releases
@@ -336,14 +368,16 @@ jobs:
           kubectl -n "$NAMESPACE" rollout status deploy/admin-frontend --timeout=5m
 
       - name: Record manifest (deploy only)
-        if: inputs.action == 'deploy'
+        if: needs.prepare.outputs.action == 'deploy'
+        env:
+          REGION: ${{ needs.prepare.outputs.region }}
         run: |
           set -euo pipefail
           mkdir -p "/srv/cca/releases/${VERSION}"
           jq -n \
             --arg v "$VERSION" \
             --arg env "$ENVIRONMENT" \
-            --arg region "${{ inputs.region }}" \
+            --arg region "$REGION" \
             --arg backend "$BACKEND_IMAGE" \
             --arg admin "$ADMIN_IMAGE" \
             '{deployment:$v, environment:$env, region:$region, backend_image:$backend, admin_image:$admin}' \
@@ -353,14 +387,16 @@ jobs:
         run: ./scripts/health-check.sh "$ENVIRONMENT" "${{ needs.prepare.outputs.backend_port }}" "${{ needs.prepare.outputs.admin_port }}" "$VERSION"
 
       - name: Tag this version in git (deploy only)
-        if: inputs.action == 'deploy'
+        if: needs.prepare.outputs.action == 'deploy'
+        env:
+          REGION: ${{ needs.prepare.outputs.region }}
         run: |
           set -euo pipefail
           git config user.email "brguru90@gmail.com"
           git config user.name "brguru90"
           git tag -a "$VERSION" -m "Deployment ${VERSION}
 
-          region: ${{ inputs.region }}
+          region: ${REGION}
           environment: ${ENVIRONMENT}
           backend:  ${BACKEND_IMAGE}
           admin:    ${ADMIN_IMAGE}"
@@ -370,7 +406,7 @@ jobs:
     needs: [prepare, deploy-terraform, build-flutter]
     if: |
       always() &&
-      inputs.action == 'deploy' &&
+      needs.prepare.outputs.action == 'deploy' &&
       needs.deploy-terraform.result == 'success'
     runs-on: [self-hosted, linux]
     env:
@@ -385,6 +421,9 @@ jobs:
           path: ${{ runner.temp }}/release-${{ env.VERSION }}
 
       - name: Create GitHub Release with whatever assets exist
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          REGION: ${{ needs.prepare.outputs.region }}
         run: |
           set -euo pipefail
           manifest="/srv/cca/releases/${VERSION}/manifest.json"
@@ -406,5 +445,5 @@ jobs:
           gh release create "$VERSION" \
             --repo "${{ github.repository }}" \
             --title "$VERSION" \
-            --notes "Deployment ${VERSION} (environment: ${{ inputs.environment }}, region: ${{ inputs.region }})" \
+            --notes "Deployment ${VERSION} (environment: ${ENVIRONMENT}, region: ${REGION})" \
             "${assets[@]}"

@@ -60,4 +60,4 @@ This repository was built without shell/SSH access to the actual home server. `d
 ## Conventions
 
 - Git identity for every commit in this repo: `brguru90@gmail.com` / `brguru90`, set via `git config --local` (not global).
-- `cca_backend`, `cca_frontend`, `cca_admin_frontend` source findings that inform this repo's design are documented in IMPLEMENTATION_PLAN.md and `docs/SECURITY.md` — this repo does not modify those three repos.
+- `cca_backend`, `cca_frontend`, `cca_admin_frontend` source findings that inform this repo's design are documented in IMPLEMENTATION_PLAN.md and `docs/SECURITY.md` — this repo does not modify application source in those three repos. The one exception is `.github/workflows/notify-cca-infra.yml`, an identical additive CI file pushed to all three (with explicit confirmation) to support push-triggered `integration` auto-deploy — see IMPLEMENTATION_PLAN.md §15. Don't treat that as license to make further submodule changes without asking first.

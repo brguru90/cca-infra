@@ -70,7 +70,7 @@ Both planning documents were written before anyone read the actual application s
 This implementation was produced without shell/SSH access to the actual home server. It therefore:
 - **Produces and commits** the complete `cca-infra` repository content (Terraform, Dockerfiles, GitHub Actions workflows, install/ops scripts, K8s-adjacent config, docs) on `initial_implementation`.
 - **Does not run** `terraform apply`, `install-k3s.sh`, or anything against a live cluster. The scripts are written to be run *by the server owner, on the server*; [docs/RUNBOOK.md](docs/RUNBOOK.md) documents exactly how.
-- **Does not modify** `cca_backend`, `cca_frontend`, or `cca_admin_frontend` (e.g. a `go.sum` companion PR, or rotating leaked credentials) — those are separate repos. Findings and recommendations live in `docs/SECURITY.md` instead.
+- **Does not modify application source** in `cca_backend`, `cca_frontend`, or `cca_admin_frontend` (e.g. a `go.sum` companion PR, or rotating leaked credentials) — those remain out of scope, and findings/recommendations live in `docs/SECURITY.md` instead. The one deliberate exception, made only after explicit confirmation, is a single additive CI file (`.github/workflows/notify-cca-infra.yml`) pushed to all three repos to support push-triggered auto-deploy — see [§15](#15-auto-deploy-integration-on-app-repo-push).
 - Verification here is static: `terraform validate`/`fmt`, `hadolint`, `shellcheck`, YAML sanity checks — not a live deploy.
 
 ## 4. Repository layout
@@ -82,13 +82,13 @@ cca-infra/
 ├── CLAUDE.md
 ├── initial-plan.md / final-plan.md
 ├── .gitmodules
-├── cca_backend/  cca_frontend/  cca_admin_frontend/   ← git submodules (main branch)
+├── cca_backend/  cca_frontend/  cca_admin_frontend/   ← git submodules (main branch); each also carries
+│                                                          .github/workflows/notify-cca-infra.yml - see §15
 ├── .github/workflows/
-│   ├── deploy.yml                  ← deploy | rollback
+│   ├── deploy.yml                  ← deploy | rollback | repository_dispatch(app-push) auto-deploy
 │   ├── ops.yml                     ← stop | restart | status | scale
 │   ├── platform.yml                ← one-shot: metrics-server check, Mongo operator, Loki/Alloy/Grafana
-│   ├── verify.yml                  ← PR checks: terraform validate/fmt, hadolint, actionlint
-│   └── watch-app-repos.yml         ← polls the 3 app repos' main, auto-deploys integration on change
+│   └── verify.yml                  ← PR checks: terraform validate/fmt, hadolint, actionlint
 ├── docker/
 │   ├── backend/Dockerfile
 │   └── admin-frontend/Dockerfile
@@ -133,9 +133,9 @@ cca-infra/
 - **`terraform/app/storage.tf`** — a `local-path` PVC (`ReadWriteOnce`, safe here specifically because K3s is single-node) shared by `backend`/`backend-cron`/`backend-video` at `/web_app/uploads`, so `PROTECTED_UPLOAD_PATH`/`UNPROTECTED_UPLOAD_PATH` survive pod restarts and are visible across HPA-scaled replicas — added during the [§13](#13-post-implementation-alignment-check) alignment check, not part of the original implementation pass.
 - **`scripts/apply-secrets.sh`** — validates every required env var is set, then `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -` for backend secrets and the Firebase JSON (via `/dev/shm` + `shred`, never on disk longer than needed).
 - **`scripts/install-k3s.sh`** — dual-stack install flags, `--disable=traefik --disable=servicelb`, `--kube-apiserver-arg=service-node-port-range=3200-4000`, sysctls for IPv6 forwarding, kubeconfig group-readable for the runner user.
-- **`.github/workflows/deploy.yml`** — `prepare` (compute version + per-env ports) → parallel `build-backend` / `build-admin` / `build-flutter` → `deploy-terraform` (needs backend+admin only, **not** flutter — a Gradle flake shouldn't block a prod API deploy) → `post-verify`/`record-release`. Least-privilege permissions, environment-scoped concurrency group shared with `ops.yml`.
+- **`.github/workflows/deploy.yml`** — triggered by `workflow_dispatch` (manual) or `repository_dispatch` (app-push, always resolves to `action=deploy, environment=integration` — see [§15](#15-auto-deploy-integration-on-app-repo-push)). `prepare` resolves `action`/`environment`/`region` once (with an `inputs.x || 'default'` fallback so both trigger types agree) plus version + per-env ports → parallel `build-backend` / `build-admin` / `build-flutter` → `deploy-terraform` (needs backend+admin only, **not** flutter — a Gradle flake shouldn't block a prod API deploy) → `record-release`. Every job reads `needs.prepare.outputs.*`, never `inputs.*` directly, since `inputs` is empty for `repository_dispatch` runs. Least-privilege permissions, environment-scoped concurrency group shared with `ops.yml`.
 - **`.github/workflows/ops.yml`** — thin shim over `scripts/ops.sh` for `stop`/`restart`/`status`/`scale`; read-only permissions; same concurrency group as `deploy.yml` so ops and deploys serialize per environment.
-- **`.github/workflows/watch-app-repos.yml`** — polls `cca_backend`/`cca_frontend`/`cca_admin_frontend`'s `main` every 5 minutes (self-hosted, matrix per repo, last-seen SHA cached at `/srv/cca/state/watch/<repo>.sha`) and dispatches `deploy.yml` with `action=deploy, environment=integration` when any of them moves — see [§15](#15-auto-deploy-integration-on-app-repo-push).
+- **`cca_backend|cca_frontend|cca_admin_frontend/.github/workflows/notify-cca-infra.yml`** — identical file in all three app repos; fires `repository_dispatch` at `cca-infra` on push to `main`, using a `CCA_INFRA_DISPATCH_TOKEN` repo secret. See [§15](#15-auto-deploy-integration-on-app-repo-push).
 - **`docs/SECURITY.md`** — documents (without reproducing secret values) every credential found committed in the three app repos and the compromised Flutter keystore; rotation is the app owner's action, out of scope for this branch.
 - **`kubernetes/nginx/admin-default.conf.tpl`** — includes the `upstream backend_upstream { server backend:8700 max_fails=3 fail_timeout=10s; }` circuit breaker ([§9.1](#9-circuit-breakers)).
 - **`scripts/health-check.sh`** — trips the deployment circuit breaker: on health-check failure, triggers an automatic `terraform apply` back to the recorded previous version instead of leaving a broken deploy live ([§9.2](#9-circuit-breakers)).
@@ -220,11 +220,25 @@ One accepted side effect, left as-is: `backend-cron`'s own `VideoStreamGeneratio
 
 Requirement: merging to `main` in `cca_backend`/`cca_frontend`/`cca_admin_frontend` should automatically deploy `integration`; `uat`/`production` stay manually triggered from the Actions tab, unchanged.
 
-GitHub Actions has no native way for a workflow in `cca-infra` to react to a push in a *different* repository. The standard fix is push-triggered: add a small workflow to each app repo that fires `repository_dispatch` (or calls `gh workflow run` directly) against `cca-infra` on push to `main`. That requires two things this project avoids unless unavoidable — editing the submodule repos, and a cross-repo PAT secret configured in all three of them.
+GitHub Actions has no native way for a workflow in `cca-infra` to react to a push in a *different* repository. The standard fix is push-triggered: a small workflow in each app repo fires a `repository_dispatch` event against `cca-infra` on push to `main`. An initial pass avoided this with a polling design specifically to keep the three app repos untouched (see git history) — the user then explicitly asked for push-triggered instead, which is exactly the confirmation needed to edit those repos, so this section describes what's actually implemented now.
 
-There's a way that needs neither. All three app repos are public, so their latest `main` commit SHA is readable via the GitHub API with no special access at all. `watch-app-repos.yml` polls each one every 5 minutes (matrix job, self-hosted — it needs no cluster access, but it does need the same GITHUB_TOKEN-based `gh workflow run` capability, and there's no supply-chain reason to prefer a hosted runner for a workflow with zero third-party actions), compares against a last-seen SHA cached at `/srv/cca/state/watch/<repo>.sha`, and dispatches `deploy.yml` with `action=deploy, environment=integration, region=asia-india` when any of them has moved. The SHA file is only updated *after* a successful dispatch, so a failed trigger gets retried on the next poll rather than silently skipped.
+**In each of `cca_backend`/`cca_frontend`/`cca_admin_frontend`** (identical file, copy-pasted, differs only by which repo it lives in): `.github/workflows/notify-cca-infra.yml`, triggered on `push: branches: [main]`, calls:
 
-Trade-offs accepted:
-- **Up to ~5 minutes of latency** instead of an instant push trigger. Adjust the `cron:` schedule in the workflow file directly if that's too slow — there's no Terraform variable wrapping it, since it's not templated.
-- **Possible double-deploys**: if two app repos both move within the same polling window, two separate `deploy.yml` dispatches fire back-to-back. Harmless — `deploy.yml`'s existing concurrency group serializes them, and the second one just redeploys against the latest `main` of all three repos regardless of which one triggered it. Not worth adding debounce logic for a home-lab integration environment.
-- **GitHub auto-disables scheduled workflows after 60 days of repository inactivity** — a real caveat for a low-traffic personal project; documented in `docs/RUNBOOK.md` as something to check if auto-deploys silently stop.
+```bash
+gh api repos/brguru90/cca-infra/dispatches \
+  -f event_type=app-push \
+  -f "client_payload[repo]=${{ github.event.repository.name }}" \
+  -f "client_payload[sha]=${{ github.sha }}"
+```
+
+This needs a **`CCA_INFRA_DISPATCH_TOKEN` repository secret in each of the three app repos** — a Personal Access Token with permission to trigger `repository_dispatch` on `brguru90/cca-infra`. The default `GITHUB_TOKEN` can't be used: it has no access outside the repo the workflow runs in. GitHub's docs confirm a classic PAT needs the `repo` scope for this endpoint; a fine-grained PAT scoped to just `cca-infra` with "Contents: Read and write" is the tighter equivalent (not spelled out as explicitly in GitHub's docs for this specific endpoint, but consistent with its general permission model — verify by testing). See `docs/RUNBOOK.md` for the exact setup steps. Until the secret is set, the workflow fails loudly with a clear error rather than silently doing nothing.
+
+**In `cca-infra`**: `deploy.yml`'s `on:` gained `repository_dispatch: types: [app-push]` alongside `workflow_dispatch`. The whole file previously read `inputs.action`/`inputs.environment`/`inputs.region` directly in nearly every job — but `inputs.*` is only populated for `workflow_dispatch` runs, so every job now reads `needs.prepare.outputs.action`/`.environment`/`.region` instead. `prepare` resolves these once, with a fallback pattern (`inputs.action || 'deploy'`, `inputs.environment || 'integration'`, `inputs.region || 'asia-india'`) that makes a `repository_dispatch` run resolve to exactly the same values as a manual `action=deploy, environment=integration, region=asia-india` run — including the top-level `concurrency.group` expression, which can't reference job outputs (evaluated before any job runs) and uses the same `||` fallback directly. This is also why `repository_dispatch` and a manual `integration` deploy correctly serialize against each other instead of racing: they resolve to the identical concurrency group string.
+
+`action=rollback` is only ever reachable via `workflow_dispatch` — a `repository_dispatch` run always resolves `action=deploy`, so the rollback branch of `prepare`'s resolve script is simply never exercised by an app-repo push.
+
+The earlier polling workflow (`watch-app-repos.yml`) was deleted, not kept as a fallback — running both would risk duplicate/racing dispatches for the same push.
+
+Accepted trade-offs, now much smaller than the polling design's:
+- **A GitHub Actions run per app-repo push, even for pushes that don't need a redeploy** (e.g. a docs-only commit) — `notify-cca-infra.yml` doesn't inspect what changed, only that `main` moved. Acceptable for a home-lab integration environment; a path filter (`on.push.paths-ignore`) could be added later if this becomes noisy.
+- **The PAT is a standing secret in three separate repos** — if `cca-infra` is ever made private, or its dispatch-triggering surface needs tightening, all three copies need rotating together. Documented in `docs/SECURITY.md` alongside this repo's other credential-adjacent notes.

@@ -80,6 +80,29 @@ contents of an Android `key.properties` file) - see docs/SECURITY.md before
 skipping these; without them, the Flutter build uses the keystore already
 committed in `cca_frontend`, which is public.
 
+### Push-triggered integration auto-deploy
+
+`cca_backend`, `cca_frontend`, and `cca_admin_frontend` each carry
+`.github/workflows/notify-cca-infra.yml`, which fires a `repository_dispatch`
+at this repo on every push to their `main`. That call needs a
+**`CCA_INFRA_DISPATCH_TOKEN`** repository secret set in **all three** app
+repos (not this one):
+
+1. Create a Personal Access Token as `brguru90`:
+   - Classic PAT (simplest): GitHub → Settings → Developer settings →
+     Personal access tokens → Tokens (classic) → Generate new token, scope
+     `repo`.
+   - Fine-grained PAT (tighter): scope it to only `brguru90/cca-infra`, with
+     repository permission "Contents: Read and write". GitHub's docs don't
+     spell out fine-grained requirements for this specific endpoint, so
+     verify it actually works (see step 3) before relying on it.
+2. Add it as a secret named `CCA_INFRA_DISPATCH_TOKEN` in each of
+   `cca_backend`, `cca_frontend`, and `cca_admin_frontend` (Settings →
+   Secrets and variables → Actions → New repository secret).
+3. Verify: push any commit to one app repo's `main`, then check that repo's
+   **Notify cca-infra** workflow run succeeded, and that a **CCA Deploy**
+   run started here shortly after with `environment=integration`.
+
 ## 5. First-time platform apply
 
 Run the **CCA Platform** workflow (`workflow_dispatch`, no inputs) from the
@@ -107,17 +130,21 @@ curl -4 http://<server-ipv4>:3202/
 
 Repeat with `environment=uat` and `environment=production` when ready.
 
-After this first manual run, `integration` deploys itself automatically:
-**CCA Watch App Repos** polls `cca_backend`/`cca_frontend`/`cca_admin_frontend`
-every 5 minutes and re-runs this same deploy whenever any of their `main`
-branches move (see IMPLEMENTATION_PLAN.md §15) - no action needed from you.
-`uat` and `production` are never auto-deployed; always trigger those by hand.
+After this first manual run, and once `CCA_INFRA_DISPATCH_TOKEN` is set up
+(see step 4), `integration` deploys itself automatically: any push to `main`
+in `cca_backend`, `cca_frontend`, or `cca_admin_frontend` triggers this same
+deploy within seconds (see IMPLEMENTATION_PLAN.md §15) - no action needed
+from you. `uat` and `production` are never auto-deployed; always trigger
+those by hand from the Actions tab.
 
-If auto-deploys silently stop happening, check the **CCA Watch App Repos**
-workflow's own run history in the Actions tab first - GitHub disables
-scheduled workflows after 60 days without any repository activity, and it
-needs a manual re-enable (Actions tab → the workflow → "Enable workflow")
-after that.
+If auto-deploys silently stop happening: check the pushing app repo's
+**Notify cca-infra** workflow run first - a red X there almost always means
+`CCA_INFRA_DISPATCH_TOKEN` is missing, expired, or has lost access to
+`cca-infra` (e.g. the PAT owner's account permissions changed) in that repo.
+If that run is green but no **CCA Deploy** run appears here, re-check the
+`event_type` the notify workflow sends (`app-push`) matches
+`deploy.yml`'s `on.repository_dispatch.types` exactly - a mismatch there is
+silent on both sides.
 
 ## 7. Day-2 operations
 
