@@ -72,7 +72,12 @@ resource "kubernetes_deployment_v1" "backend_cron" {
         container {
           name  = "backend-cron"
           image = var.backend_image
-          args  = ["-micro_service", "cron_job"]
+          # See backend_api.tf's identical note: this image is imported
+          # straight into K3s's containerd store on this same host right
+          # after being built, and a brand-new GHCR tag's anonymous-pull ACL
+          # can 403 for a long time right after first push.
+          image_pull_policy = "IfNotPresent"
+          args              = ["-micro_service", "cron_job"]
 
           env_from {
             config_map_ref {
@@ -213,7 +218,9 @@ resource "kubernetes_cron_job_v1" "backend_video" {
             container {
               name  = "backend-video"
               image = var.backend_image
-              args  = ["-micro_service", "video_processing"]
+              # See backend_api.tf's identical note.
+              image_pull_policy = "IfNotPresent"
+              args              = ["-micro_service", "video_processing"]
 
               env_from {
                 config_map_ref {

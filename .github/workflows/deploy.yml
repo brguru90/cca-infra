@@ -188,6 +188,30 @@ jobs:
           docker push "${{ needs.prepare.outputs.backend_image }}"
           docker push "ghcr.io/brguru90/cca-backend:${{ needs.prepare.outputs.environment }}-latest"
 
+      - name: Import image into K3s containerd (bypass registry pull on this single-node cluster)
+        # The runner and the K3s node are the SAME host on this project (see
+        # IMPLEMENTATION_PLAN.md) - there is no reason for the Deployment's
+        # Pod to re-fetch over the network an image that was just built right
+        # here. This also sidesteps a real GHCR quirk hit on the first live
+        # deploys: a brand-new tag's anonymous-pull ACL can take 10-20+
+        # minutes to propagate after its first push, during which kubelet's
+        # pull gets a flat 403 from ghcr.io's token endpoint (not a network
+        # failure - a real, if temporary, authorization decision) and the
+        # Deployment never reaches Ready within any sane rollout timeout.
+        # `docker save | k3s ctr images import` loads the exact same tagged
+        # reference straight into containerd's local content store, so the
+        # kubelet's `image_pull_policy = "IfNotPresent"` (see backend_api.tf/
+        # backend_cron.tf) finds it locally and never calls out to ghcr.io at
+        # all for this environment's rollout. The registry push above is
+        # kept regardless, for provenance and for the day this becomes a
+        # multi-node cluster (see storage.tf's identical single-node caveat).
+        run: |
+          set -euo pipefail
+          docker save \
+            "${{ needs.prepare.outputs.backend_image }}" \
+            "ghcr.io/brguru90/cca-backend:${{ needs.prepare.outputs.environment }}-latest" \
+            | k3s ctr images import -
+
   build-admin:
     needs: prepare
     if: needs.prepare.outputs.action == 'deploy'
@@ -216,6 +240,16 @@ jobs:
             sources/cca_admin_frontend
           docker push "${{ needs.prepare.outputs.admin_image }}"
           docker push "ghcr.io/brguru90/cca-admin-frontend:${{ needs.prepare.outputs.environment }}-latest"
+
+      - name: Import image into K3s containerd (bypass registry pull on this single-node cluster)
+        # See the identical step in build-backend for why - same root cause,
+        # same fix, same single-host assumption.
+        run: |
+          set -euo pipefail
+          docker save \
+            "${{ needs.prepare.outputs.admin_image }}" \
+            "ghcr.io/brguru90/cca-admin-frontend:${{ needs.prepare.outputs.environment }}-latest" \
+            | k3s ctr images import -
 
   build-flutter:
     needs: prepare

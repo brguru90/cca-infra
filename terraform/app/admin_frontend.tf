@@ -26,6 +26,11 @@ resource "kubernetes_deployment_v1" "admin_frontend" {
         container {
           name  = "admin-frontend"
           image = var.admin_image
+          # See backend_api.tf's identical note: this image is imported
+          # straight into K3s's containerd store on this same host right
+          # after being built, and a brand-new GHCR tag's anonymous-pull ACL
+          # can 403 for a long time right after first push.
+          image_pull_policy = "IfNotPresent"
 
           port {
             container_port = 80

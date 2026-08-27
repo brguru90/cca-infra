@@ -80,6 +80,15 @@ resource "kubernetes_deployment_v1" "backend" {
         container {
           name  = "backend"
           image = var.backend_image
+          # IfNotPresent, not the default-for-explicit-tags behavior alone:
+          # deploy.yml's build-backend job imports this exact image straight
+          # into K3s's containerd store on this same host right after
+          # building it (see that step's comment) - the Pod should never hit
+          # the network for an image that's already sitting right here, and
+          # anonymous pulls from a brand-new GHCR tag can 403 for 10-20+
+          # minutes right after first push (hit for real on this project's
+          # first live deploys) before that ACL propagates.
+          image_pull_policy = "IfNotPresent"
 
           # No hardcoded -micro_service in the image (see
           # docker/backend/Dockerfile) - this is what makes this Deployment
