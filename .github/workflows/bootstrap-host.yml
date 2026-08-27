@@ -38,6 +38,34 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Ensure terraform and helm are installed (idempotent)
+        # bootstrap-server.sh only verifies these are present - it
+        # deliberately doesn't install anything, since it also has to work
+        # for the manual SSH path where auto-installing tools behind the
+        # user's back would be a surprise. This step is specific to the
+        # fully-automated runner path, and assumes the runner service itself
+        # runs as root (no `sudo` prefix here - apt-get/wget/curl need root,
+        # and unlike the two scripts below, these raw commands can't be
+        # scoped cleanly via a sudoers path rule). If your runner runs as a
+        # non-root user with only the scoped sudoers entry from
+        # docs/RUNBOOK.md, install terraform/helm by hand instead and this
+        # step becomes a no-op.
+        run: |
+          set -euo pipefail
+          if ! command -v terraform >/dev/null 2>&1; then
+            echo "Installing terraform..."
+            wget -qO- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+            echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
+            apt-get update -y
+            apt-get install -y terraform
+          fi
+          if ! command -v helm >/dev/null 2>&1; then
+            echo "Installing helm..."
+            curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          fi
+          terraform version
+          helm version
+
       - name: Install K3s (idempotent - no-ops if already installed)
         run: sudo ./scripts/install-k3s.sh
 
