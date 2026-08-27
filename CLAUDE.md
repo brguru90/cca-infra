@@ -2,45 +2,62 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What this directory is
+## What this repository is
 
-This is **not a source code repository** — it's not a git repo and contains no buildable code, no package manager files, and no tests. It holds two long-form architecture/design planning documents (AI-assisted Q&A transcripts) for a personal home-lab CI/CD and deployment project. There is nothing to build, lint, or test here.
+This is `cca-infra`: Terraform + Kubernetes (K3s) deployment infrastructure for a personal travel-planner app ("cca"), split across `cca_backend` (Go/Gin API), `cca_frontend` (Flutter, built to an APK only), and `cca_admin_frontend` (React admin UI) — all three vendored here as **git submodules for reference only**. CI never builds from the pinned submodule SHA; every workflow job checks out each app repo's `main` fresh. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the ground-truth findings (from reading the actual app source) that reshaped it, and [README.md](README.md) for a reader's-guide to the rest of the docs.
 
-- `initial-plan.md` — the original design: Terraform + Docker on a home server.
-- `final-plan.md` — **supersedes `initial-plan.md`**. Its header states it's "requirements (enhancement of ./initial-plan.md)". It revises the design to use Kubernetes (K3s) instead of plain Docker, and changes how the Flutter app is handled.
+- `main` holds only the original planning transcripts (`initial-plan.md`, `final-plan.md` — the latter supersedes the former) plus this file and the README.
+- `initial_implementation` holds the actual infrastructure code described below.
 
-When asked about "the plan" or "the architecture," treat `final-plan.md` as authoritative; only fall back to `initial-plan.md` for sections final-plan.md doesn't override (e.g. secrets rotation findings, logging stack, Terraform state layout — these carry forward unchanged).
+## Commands
 
-## The system being designed
+There's no application build here — this repo *produces* Terraform/Docker/CI config for other repos. The checks that exist:
 
-A deployment pipeline for a personal travel-planner app ("cca") spread across repos:
-- `cca_backend` (Go API)
-- `cca_frontend` (Flutter mobile app)
-- `cca_admin_frontend` (React admin UI)
-- `cca-infra` (new, private repo to be created — holds Terraform, Kubernetes manifests, and GitHub Actions workflows)
+```bash
+# Terraform (run per root: terraform/app, terraform/platform)
+terraform -chdir=terraform/app fmt -check -recursive
+terraform -chdir=terraform/app init -backend=false   # validate doesn't need a real backend/cluster
+terraform -chdir=terraform/app validate
 
-Target: merge to `main` in an app repo → manually trigger a GitHub Actions workflow in `cca-infra` → build & push Docker images to GHCR → deploy to a single Ubuntu 24 home server (public IPv6 DDNS host `travel-planner.ddns.net`) running K3s, with separate `integration`/`uat`/`production` environments (each a K8s namespace) and a single "region" (`asia-india`, since there's only one physical server).
+# Dockerfiles
+hadolint docker/backend/Dockerfile docker/admin-frontend/Dockerfile
 
-### Key architecture facts (final-plan.md)
+# Shell scripts
+shellcheck scripts/*.sh
 
-- **Runtime**: K3s (single-node Kubernetes) on the Ubuntu 24 host, not raw Docker. Bundled Traefik is disabled in favor of NodePort services. Terraform runs *on the home server* (talking to the local K3s API / Docker socket), not from the GitHub runner — the runner only reaches the server over SSH/IPv6 (or a self-hosted runner, if available, to avoid inbound SSH entirely).
-- **Environments = namespaces**: `cca-integration`, `cca-uat`, `cca-production`, each with its own Deployment/Service/Secret/HPA per app component.
-- **NodePorts** (K3s `service-node-port-range` widened to `3200-8799` to fit the user's requested range):
-  | Environment | Backend | Frontend | Admin |
-  |---|---|---|---|
-  | integration | 8701 | 3201 | 3202 |
-  | uat | 8702 | 3301 | 3302 |
-  | production | 8703 | 3401 | 3402 |
-- **Flutter app is not deployed to Kubernetes.** CI only runs `flutter build apk --release` and publishes the APK as a GitHub Actions artifact / GitHub Release asset, alongside a `source-version.json` recording which backend/admin/flutter commits it was built from.
-- **Versioning/rollback**: every deploy is tagged `v<UTC timestamp>-<environment>-r<workflow run number>` (e.g. `v2026.08.26.143015-production-r184`). This tags the GHCR images and the `cca-infra` git commit. Rollback re-applies Terraform with the old image tag — no rebuild. Prefer this explicit tagging over relying on `kubectl rollout undo`.
-- **Terraform state**: local state per environment on the home server (`/srv/cca/state/<env>/terraform.tfstate`), with timestamped backups taken before every apply.
-- **Secrets**: live in GitHub (Environment) Secrets, materialized as Kubernetes Secrets via Terraform at deploy time — never committed to git or baked into images. Note the known caveat that Terraform-managed K8s Secrets land in Terraform state, which is acceptable for this hobby setup but would need Vault/SOPS+age for anything more sensitive.
-- **Logging**: container/Pod logs → Grafana Alloy → Loki → Grafana, as a self-hosted CloudWatch Logs equivalent, labeled by region/environment/service/version.
-- **Autoscaling caveat**: HPA only scales Pod replica counts on the existing single node — it cannot add nodes/CPU/RAM. True node autoscaling would require a later phase (KVM + multiple VMs), explicitly deferred.
-- **Security findings carried over from initial-plan.md**: `cca_backend`'s Dockerfile has hardcoded DB/JWT/Redis/payment secrets, and `cca_admin_frontend` has `.env`/`.env_prod` files tracked in its (public) repo. Both need real credential rotation and removal from git history, not just a follow-up commit deleting them.
+# GitHub Actions workflows
+actionlint .github/workflows/*.yml
+```
 
-## Working in this directory
+All four are also wired into `.github/workflows/verify.yml` on pull requests. None of this requires a live cluster — that only exists on the actual home server, which nothing in this repo has direct access to (see "Deployment reality" below).
 
-Since there's no code, typical "build/test/lint" workflows don't apply. Most useful tasks here are:
-- Reading/updating the plan documents to reflect new decisions.
-- Drafting the actual `cca-infra` repo contents (Terraform, K8s manifests, GitHub Actions workflows) described in `final-plan.md`, when asked — that work will happen in a new repository, not in this directory.
+To smoke-test a script's logic without a real cluster/server, stub `kubectl`/`curl`/`terraform` as executables earlier on `$PATH` and override the env vars scripts read for their target directories (e.g. `RELEASES_DIR` for `scripts/health-check.sh`). `scripts/install-k3s.sh` and `scripts/bootstrap-server.sh` are Ubuntu-server-only and aren't meant to be run or stubbed locally.
+
+## Architecture
+
+**Two Terraform roots, not one.** `terraform/app/` is applied once *per environment* (`integration`/`uat`/`production`), each with independent local state (`/srv/cca/state/<env>/terraform.tfstate`) and its own Kubernetes namespace (`cca-<env>`). `terraform/platform/` is applied once, cluster-wide, before any `terraform/app` environment's first apply — it installs the MongoDB Community Operator (whose CRD `terraform/app/mongodb.tf`'s `kubernetes_manifest` resource depends on existing) and the Loki/Alloy/Grafana observability stack.
+
+**Namespace ownership is split between `kubectl` and Terraform on purpose.** `scripts/apply-secrets.sh` creates each namespace (idempotently, via plain `kubectl apply`) *before* `terraform apply` ever runs, because it needs somewhere to put Secrets first. `terraform/app/namespace.tf` therefore reads the namespace as `data`, not a `resource` — a Terraform-owned resource would 409 on every environment's first apply since the namespace already exists by then. Don't "fix" this back to a resource.
+
+**Secrets never enter Terraform state.** `scripts/apply-secrets.sh` (sourced from GitHub Environment Secrets) applies every Kubernetes Secret via plain `kubectl` before Terraform runs. Terraform only ever references them by name (`envFrom`/`secretKeyRef`), never via a `data "kubernetes_secret_v1"` (which would read plaintext values into state). `terraform/app/preflight.tf`'s `data "external"` guard checks Secret *existence only* (via `scripts/secret-guard.sh`) and fails `plan` in seconds with a clear message if they're missing, instead of every Deployment timing out in `CreateContainerConfigError` minutes later.
+
+**The backend image plays three roles via `args:`, not three images.** `docker/backend/Dockerfile` ships no hardcoded `-micro_service` flag; `terraform/app/backend_api.tf` (`api_server`), `backend_cron.tf` (`cron_job`, no Service/HTTP probes — it has no HTTP listener), and the optional video worker all use the same image with different container `args`. The backend hard-panics on boot if Redis is unreachable (in *every* mode) or if the Firebase service-account JSON is missing — both get an `initContainer` wait-loop and a Secret volume mount respectively, on every Deployment that uses this image.
+
+**HPA, not Terraform, owns replica count after creation.** Every HPA-scaled `kubernetes_deployment_v1` has `lifecycle { ignore_changes = [spec[0].replicas] }`. Without it, every `terraform apply` would read the HPA's live replica count as drift and scale back down — fighting the autoscaler on every single deploy, and reverting anything `scripts/ops.sh scale`/`stop` did.
+
+**The deployment circuit breaker lives in `scripts/health-check.sh`, not just in CI.** On a failed post-apply health check, it automatically re-applies Terraform with the last known-good version recorded in `/srv/cca/releases/<env>.previous`, re-verifies, and *still exits non-zero* either way — a tripped breaker is a failed deploy even though it healed itself. `.github/workflows/deploy.yml` owns the `.current` → `.previous` rotation *before* every apply; `health-check.sh` only ever writes `.current` (to the new version on success, or back to the previous version if it had to roll back).
+
+**One admin-frontend image serves all three environments.** `cca_admin_frontend` has no build-time API URL variable anywhere in its source — every API call is a same-origin relative path. The only environment-specific piece is nginx's reverse-proxy target, shipped as a Kubernetes ConfigMap (`kubernetes/nginx/admin-default.conf.tpl`, rendered by `terraform/app/configmap_nginx.tf`) mounted at deploy time, not baked into the image. That template also carries the nginx-upstream circuit breaker (`max_fails`/`fail_timeout`) in front of the backend.
+
+**MongoDB scaling is a Terraform variable, not an HPA.** The MongoDB Community Operator's CRD exposes no `/scale` subresource, so `mongo_members` (`terraform/app/variables.tf`) is bumped manually and deliberately — see IMPLEMENTATION_PLAN.md for why reactive autoscaling of a quorum-based store was rejected outright rather than left as a TODO.
+
+**Third-party GitHub Actions are pinned to commit SHAs and kept to a minimum**, deliberately more paranoid than a typical repo: the self-hosted runner they execute on holds a cluster-admin kubeconfig and the Docker socket.
+
+## Deployment reality
+
+This repository was built without shell/SSH access to the actual home server. `docs/RUNBOOK.md` is the execution path for a human (or a future agent) with real server access; nothing here has been applied to a live cluster. If you're asked to "deploy" or "apply" something from a session like this one, that almost certainly means: write/update the Terraform or workflow code, run the static checks above, and stop there — not attempt to reach the actual server.
+
+## Conventions
+
+- Git identity for every commit in this repo: `brguru90@gmail.com` / `brguru90`, set via `git config --local` (not global).
+- `cca_backend`, `cca_frontend`, `cca_admin_frontend` source findings that inform this repo's design are documented in IMPLEMENTATION_PLAN.md and `docs/SECURITY.md` — this repo does not modify those three repos.
