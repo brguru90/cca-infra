@@ -365,3 +365,46 @@ jobs:
           backend:  ${BACKEND_IMAGE}
           admin:    ${ADMIN_IMAGE}"
           git push origin "$VERSION"
+
+  record-release:
+    needs: [prepare, deploy-terraform, build-flutter]
+    if: |
+      always() &&
+      inputs.action == 'deploy' &&
+      needs.deploy-terraform.result == 'success'
+    runs-on: [self-hosted, linux]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Download APK artifact (if the Flutter job ran and succeeded)
+        if: needs.build-flutter.result == 'success'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: apk-${{ env.VERSION }}
+          path: ${{ runner.temp }}/release-${{ env.VERSION }}
+
+      - name: Create GitHub Release with whatever assets exist
+        run: |
+          set -euo pipefail
+          manifest="/srv/cca/releases/${VERSION}/manifest.json"
+          assets=()
+          if [[ -f "$manifest" ]]; then
+            assets+=("$manifest")
+          fi
+
+          apk_dir="${{ runner.temp }}/release-${VERSION}"
+          if [[ -d "$apk_dir" ]]; then
+            assets+=("$apk_dir"/*)
+          else
+            echo "::notice::No Flutter APK for ${VERSION} (skip_flutter was set, or that job failed/was skipped) - the release will only contain the deployment manifest."
+          fi
+
+          # deploy-terraform's prior step already created and pushed this
+          # exact tag - gh release create attaches to it rather than
+          # creating a new one, since the tag already exists.
+          gh release create "$VERSION" \
+            --repo "${{ github.repository }}" \
+            --title "$VERSION" \
+            --notes "Deployment ${VERSION} (environment: ${{ inputs.environment }}, region: ${{ inputs.region }})" \
+            "${assets[@]}"
