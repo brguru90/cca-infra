@@ -40,28 +40,6 @@ jobs:
           terraform -chdir=terraform/app init -reconfigure -input=false -backend=true -lock=false \
             -backend-config="path=/srv/cca/state/${ENVIRONMENT}/terraform.tfstate" 2>&1
           terraform -chdir=terraform/app state list 2>&1
-
-          # ONE-TIME: re-importing the 3 mongo RBAC resources dropped by the
-          # crashed apply's state corruption (see IMPLEMENTATION_PLAN.md).
-          # The 2026-08-27T14:33:58Z backup restored via CCA Restore State
-          # predates these resources, but they exist for real in-cluster.
-          # This block is meant to be removed again right after it succeeds
-          # once - it errors ("already managed") on every run after that.
-          if [[ "$ENVIRONMENT" == "integration" ]]; then
-            echo "=== one-time import: mongodb RBAC resources ==="
-            terraform -chdir=terraform/app import \
-              -var-file="../../config/${ENVIRONMENT}.tfvars" \
-              -var="deployment_version=import" -var="backend_image=x" -var="admin_image=x" \
-              kubernetes_service_account_v1.mongodb_database "${NAMESPACE}/mongodb-database" 2>&1
-            terraform -chdir=terraform/app import \
-              -var-file="../../config/${ENVIRONMENT}.tfvars" \
-              -var="deployment_version=import" -var="backend_image=x" -var="admin_image=x" \
-              kubernetes_role_v1.mongodb_database "${NAMESPACE}/mongodb-database" 2>&1
-            terraform -chdir=terraform/app import \
-              -var-file="../../config/${ENVIRONMENT}.tfvars" \
-              -var="deployment_version=import" -var="backend_image=x" -var="admin_image=x" \
-              kubernetes_role_binding_v1.mongodb_database "${NAMESPACE}/mongodb-database" 2>&1
-          fi
           exit 0
 
       - name: Cluster state
