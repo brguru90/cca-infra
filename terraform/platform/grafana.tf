@@ -55,7 +55,12 @@ resource "helm_release" "grafana" {
     })
   ]
 
-  timeout = 300
+  # 900s (15min), not the default 300s: verified against the real cluster -
+  # this home connection took 5m18s just to pull the 458MB
+  # grafana/grafana:*-distroless image on a cold cache, which alone blew
+  # through the 300s default (see mongodb-operator.tf's comment).
+  timeout = 900
+  replace = true # see mongodb-operator.tf's comment on why this matters for retries after a timeout
 
   depends_on = [helm_release.loki]
 }

@@ -90,5 +90,6 @@ resource "helm_release" "loki" {
     })
   ]
 
-  timeout = 600
+  timeout = 900  # see mongodb-operator.tf's comment - generous headroom for a cold image-pull cache
+  replace = true # see mongodb-operator.tf's comment on why this matters for retries after a timeout
 }
