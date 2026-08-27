@@ -56,17 +56,42 @@ jobs:
           echo "=== DNS resolution ==="
           getent hosts release-assets.githubusercontent.com || echo "resolution failed"
 
+      - name: Work around broken IPv6 route to the GitHub release-asset CDN
+        # Diagnostics (previous step) proved this precisely: `curl -6` to
+        # release-assets.githubusercontent.com fails instantly (connect
+        # time 0.000000s - not slow, just refused/unreachable), while `-4`
+        # and default both succeed in ~0.2s. That hostname is what backs the
+        # actual chart .tgz downloads for the mongodb/loki/grafana Helm
+        # repos (they publish via GitHub Releases). Terraform's embedded
+        # Helm SDK apparently doesn't fall back to IPv4 fast enough for the
+        # real per-asset download (it hung 2 minutes before erroring on a
+        # single, uncontended fetch - ruling out the -parallelism=1 fix
+        # below as the real cure, though it's kept since it's harmless).
+        #
+        # Pinning this ONE hostname to its working IPv4 address in
+        # /etc/hosts is resolver-implementation-agnostic (glibc AND Go's
+        # pure-Go resolver both consult /etc/hosts first, unconditionally)
+        # and doesn't touch the box's real IPv6 config - K3s's own
+        # dual-stack pod networking and public app serving are untouched.
+        # The IP is re-resolved fresh each run rather than hardcoded, since
+        # GitHub's CDN IPs rotate.
+        run: |
+          set -euo pipefail
+          ipv4_addr="$(getent ahostsv4 release-assets.githubusercontent.com | awk '{print $1; exit}')"
+          if [[ -z "$ipv4_addr" ]]; then
+            echo "::error::could not resolve an IPv4 address for release-assets.githubusercontent.com - cannot apply the workaround"
+            exit 1
+          fi
+          echo "Pinning release-assets.githubusercontent.com -> ${ipv4_addr} in /etc/hosts"
+          sed -i '/release-assets\.githubusercontent\.com/d' /etc/hosts
+          echo "${ipv4_addr} release-assets.githubusercontent.com" >> /etc/hosts
+          getent hosts release-assets.githubusercontent.com
+
       - name: Terraform apply
-        # -parallelism=1: root-caused a real failure here to this - Terraform
-        # applies all 4 helm_release resources (mongodb operator, loki,
-        # alloy, grafana) in parallel by default, and this home connection
-        # can't reliably sustain that many simultaneous multi-MB chart
-        # downloads from release-assets.githubusercontent.com at once (two
-        # consecutive runs each failed "Error locating chart ... context
-        # deadline exceeded" on a DIFFERENT pair of charts, which is the
-        # signature of self-inflicted bandwidth contention, not a code bug).
-        # Serializing costs a bit of wall-clock time on a one-shot platform
-        # apply - a fine trade for reliability here.
+        # -parallelism=1 alone did NOT fix the timeouts (see the previous
+        # step's comment for the real root cause) - kept anyway since
+        # serializing chart downloads is harmless and mildly friendlier to
+        # this home connection regardless.
         run: |
           set -euo pipefail
           export TF_DATA_DIR="/srv/cca/tfdata/platform"
