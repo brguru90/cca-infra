@@ -1,0 +1,9 @@
+[submodule "cca_backend"]
+	path = cca_backend
+	url = https://github.com/brguru90/cca_backend.git
+[submodule "cca_frontend"]
+	path = cca_frontend
+	url = https://github.com/brguru90/cca_frontend.git
+[submodule "cca_admin_frontend"]
+	path = cca_admin_frontend
+	url = https://github.com/brguru90/cca_admin_frontend.git

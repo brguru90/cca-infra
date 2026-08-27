@@ -1,0 +1,19 @@
+# Local Claude Code session state — not project content
+.claude/
+
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Local secrets / generated env overrides — never commit real values
+*.env
+!config/*.tfvars.example
+env-ci.json
+
+# OS cruft
+.DS_Store
