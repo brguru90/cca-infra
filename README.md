@@ -43,7 +43,9 @@ config/               Per-environment .tfvars
 scripts/              Server-side install/ops scripts, run by CI or by hand
 .github/workflows/    deploy (also repository_dispatch-triggered) | ops | platform | verify
 docs/                 RUNBOOK, SECURITY, AWS_MAPPING
-cca_backend/ cca_frontend/ cca_admin_frontend/   git submodules, reference only - CI always builds their `main`, never the pinned SHA
+cca_backend/ cca_frontend/ cca_admin_frontend/   git submodules, reference only - CI always builds their `main`, never
+                                                  the pinned SHA. Each also carries its own
+                                                  .github/workflows/notify-cca-infra.yml (see Conventions below)
 ```
 
 ## Conventions
@@ -53,3 +55,10 @@ cca_backend/ cca_frontend/ cca_admin_frontend/   git submodules, reference only 
 - Secrets never enter Terraform state - they're applied via `kubectl` from
   `scripts/apply-secrets.sh` before every `terraform apply`, and Terraform
   only ever references them by name.
+- No changes to application source in `cca_backend`/`cca_frontend`/
+  `cca_admin_frontend` without asking first. The one standing exception is
+  `.github/workflows/notify-cca-infra.yml`, an identical additive CI file in
+  all three (added with explicit confirmation - see
+  [IMPLEMENTATION_PLAN.md §15](IMPLEMENTATION_PLAN.md#15-auto-deploy-integration-on-app-repo-push))
+  that triggers `integration` auto-deploy on push to `main`. That precedent
+  doesn't extend to further submodule changes.
