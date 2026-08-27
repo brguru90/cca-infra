@@ -1,12 +1,28 @@
-# The cron worker (-micro_service cron_job) runs a MongoDB change-stream
-# trigger (src/database/triggers) plus scheduled jobs (InitCronJobs) and never
-# starts an HTTP listener - so it has no readiness probe (nothing selects it
-# on a Service; there's nothing to gate) and no HTTP liveness probe.
+# Runs with NO -micro_service flag (falls through main.go's switch to its
+# `default` case), NOT "-micro_service cron_job" - that dedicated branch has
+# a real bug: it starts the change-stream trigger and InitCronJobs() as
+# background goroutines, then immediately `return`s from main(), which exits
+# the whole process before either goroutine gets a chance to do anything
+# (verified against the actual source: cca_backend/src/main.go's `case
+# "cron_job"` has no blocking call after starting those goroutines, unlike
+# `default`, which falls through to srv.ListenAndServe()). Hit for real on
+# the first live deploy - the pod cycled Completed/CrashLoopBackOff every
+# few seconds. This is a submodule bug, out of scope to patch there (see
+# CLAUDE.md's submodule policy) - `default` starts the identical background
+# work (go triggers.TriggerForUsersModification(); go
+# app_cron_jobs.InitCronJobs()) and then blocks for real on its HTTP server,
+# so it's the correct fix without touching cca_backend at all.
+#
+# Side effect: this Deployment now also binds an HTTP listener on
+# SERVER_PORT, same as `backend`. Harmless - no kubernetes_service_v1 here
+# routes any traffic to it - but it's why there's still no readiness probe
+# (nothing selects this Pod via a Service, so nothing needs gating) even
+# though an HTTP endpoint technically now exists.
 #
 # What it DOES still need: the same Redis-panic and Firebase-panic hazards as
 # the API (src/main.go runs configs.InitEnv/database.InitDataBases/
-# my_modules.InitFirebase for every -micro_service value, including
-# cron_job), so it gets the same initContainer and Firebase Secret mount.
+# my_modules.InitFirebase for every -micro_service value, including this
+# default case), so it gets the same initContainer and Firebase Secret mount.
 #
 # Change streams require a real replica set, which is why mongodb.tf runs the
 # MongoDB Community Operator rather than a standalone mongod even at
@@ -77,7 +93,9 @@ resource "kubernetes_deployment_v1" "backend_cron" {
           # after being built, and a brand-new GHCR tag's anonymous-pull ACL
           # can 403 for a long time right after first push.
           image_pull_policy = "IfNotPresent"
-          args              = ["-micro_service", "cron_job"]
+          # No -micro_service flag: falls through to main.go's `default`
+          # case, not the broken dedicated "cron_job" case - see this file's
+          # header comment for why.
 
           env_from {
             config_map_ref {
@@ -125,8 +143,12 @@ resource "kubernetes_deployment_v1" "backend_cron" {
             }
           }
 
-          # There is no HTTP listener to probe in this mode. A `pgrep`-style
-          # exec probe would only confirm the process hasn't exited, which is
+          # An HTTP endpoint technically exists now (see the header comment -
+          # this runs main.go's `default` case), but nothing routes traffic
+          # to it, so an HTTP probe here would only prove the listener is up,
+          # not that this Pod's actual job (cron schedules, change-stream
+          # watching) is healthy. A `pgrep`-style exec probe would similarly
+          # only confirm the process hasn't exited, which is
           # already what Kubernetes' default restartPolicy: Always covers -
           # it wouldn't detect an actually-hung worker, just add a second
           # restart trigger for the same failure mode. Instead this is
