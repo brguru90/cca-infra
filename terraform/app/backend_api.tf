@@ -34,6 +34,17 @@ resource "kubernetes_config_map_v1" "backend_env" {
     # In-cluster, unauthenticated Redis (redis.tf) - the app's client hardcodes
     # an empty password, so REDIS_ADDR is the only lever available.
     REDIS_ADDR = "redis:6379"
+
+    # connect_mongo.go calls MONGO_DB_CONNECTION.Database(DATABASE)
+    # UNCONDITIONALLY using configs.EnvConfigs.MONGO_DATABASE, regardless of
+    # whether MONGO_CUSTOM_URL (mongodb.tf) was used for the connection
+    # itself - the URL's own "/cca" path segment is never consulted for this.
+    # Leaving this unset (empty string) makes every single collection
+    # operation fail with "the Database field must be set on Operation" -
+    # hit for real on the first live deploy, verified against the actual
+    # cca_backend source rather than assumed. Must match mongodb.tf's
+    # local.mongo_db_name (the CR's spec.users[].db).
+    MONGO_DATABASE = local.mongo_db_name
   }
 }
 
