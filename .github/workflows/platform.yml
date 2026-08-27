@@ -99,13 +99,26 @@ jobs:
             -backend-config="path=/srv/cca/state/platform/terraform.tfstate"
           terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m -parallelism=1 2>&1 | tee /srv/cca/tfdata/platform-apply-debug.log
 
-      - name: Show captured apply log (always, even on failure)
+      - name: Show captured apply log and cluster state (always, even on failure)
         if: always()
         run: |
           echo "=== last 200 lines of persisted apply log ==="
           tail -n 200 /srv/cca/tfdata/platform-apply-debug.log || echo "log file not found"
-          echo "=== disk after apply ==="
-          df -h
+          echo "=== disk (main filesystems only) ==="
+          df -h / /home
+          echo "=== cca-monitoring pods ==="
+          kubectl get pods -n cca-monitoring -o wide || true
+          echo "=== cca-monitoring pvc ==="
+          kubectl get pvc -n cca-monitoring || true
+          echo "=== cca-monitoring events (most recent last) ==="
+          kubectl get events -n cca-monitoring --sort-by=.lastTimestamp || true
+          echo "=== describe any non-Running/non-Ready pod ==="
+          for pod in $(kubectl get pods -n cca-monitoring --no-headers 2>/dev/null | awk '$3!="Running" || $2!~/^([0-9]+)\/\1$/{print $1}'); do
+            echo "--- describe $pod ---"
+            kubectl describe pod "$pod" -n cca-monitoring || true
+            echo "--- logs $pod (all containers, last 100 lines) ---"
+            kubectl logs "$pod" -n cca-monitoring --all-containers --tail=100 || true
+          done
 
       - name: Verify Metrics Server and MongoDBCommunity CRD
         run: |
