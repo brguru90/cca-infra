@@ -1,0 +1,56 @@
+# One-time (idempotent) host bootstrap, run via the self-hosted runner
+# instead of SSH'ing into the server by hand. Runs scripts/install-k3s.sh
+# and scripts/bootstrap-server.sh - see docs/RUNBOOK.md Sec 2 for what each
+# does. Manual dispatch only; re-running later is safe (both scripts are
+# written to be idempotent) if you ever need to re-verify host state.
+#
+# REQUIRES passwordless sudo for the runner's OS user, scoped to these two
+# scripts - see docs/RUNBOOK.md for the exact sudoers line. This is the one
+# piece that can't be automated further: granting that access is itself a
+# security decision only you can make on the actual host, and GitHub Actions
+# has no way to supply an interactive sudo password.
+#
+# IMPORTANT - READ THIS BEFORE RUNNING CCA PLATFORM/DEPLOY AFTERWARDS:
+# bootstrap-server.sh adds the runner's OS user to the `cca` group so it can
+# read /etc/rancher/k3s/k3s.yaml, but a process's group memberships are fixed
+# at login/start time. The runner process that executes THIS job is already
+# running and won't pick up the new group membership - every OTHER workflow
+# in this repo reads the kubeconfig directly (no sudo), so you MUST restart
+# the runner service after this job succeeds, before triggering CCA
+# Platform or CCA Deploy, or they'll fail to read the kubeconfig.
+
+name: CCA Bootstrap Host
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner_user:
+        description: OS user the self-hosted runner service runs as (passed to bootstrap-server.sh as RUNNER_USER)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: [self-hosted, linux]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install K3s (idempotent - no-ops if already installed)
+        run: sudo ./scripts/install-k3s.sh
+
+      - name: Bootstrap /srv/cca layout and runner group membership
+        run: sudo RUNNER_USER="${{ inputs.runner_user }}" ./scripts/bootstrap-server.sh
+
+      - name: Verify cluster is up
+        # `sudo` here deliberately, not the group-based read every other
+        # workflow uses - this job's own process can't have the `cca` group
+        # membership the previous step just granted (see header comment), so
+        # this is the only way to confirm cluster health within this same run.
+        run: sudo kubectl get nodes -o wide
+
+      - name: Next steps
+        run: |
+          echo "::notice title=Restart the runner now::K3s and host bootstrap succeeded. Before running CCA Platform or CCA Deploy, restart the self-hosted runner service (e.g. 'sudo systemctl restart actions.runner.*', or that service's own stop/start command) so it picks up its new 'cca' group membership - otherwise those workflows will fail to read /etc/rancher/k3s/k3s.yaml."

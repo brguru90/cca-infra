@@ -41,7 +41,7 @@ docker/               Dockerfiles for cca_backend and cca_admin_frontend
 kubernetes/nginx/     nginx config template for the admin-frontend ConfigMap
 config/               Per-environment .tfvars
 scripts/              Server-side install/ops scripts, run by CI or by hand
-.github/workflows/    deploy (also repository_dispatch-triggered) | ops | platform | verify
+.github/workflows/    bootstrap-host | deploy (also repository_dispatch-triggered) | ops | platform | verify
 docs/                 RUNBOOK, SECURITY, AWS_MAPPING
 cca_backend/ cca_frontend/ cca_admin_frontend/   git submodules, reference only - CI always builds their `main`, never
                                                   the pinned SHA. Each also carries its own

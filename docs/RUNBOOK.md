@@ -33,19 +33,45 @@ repository's `initial_implementation` branch; see IMPLEMENTATION_PLAN.md §3.
 
 ## 2. One-time server setup
 
-```bash
-sudo ./scripts/install-k3s.sh
-sudo RUNNER_USER=<the user the GitHub Actions runner will run as> ./scripts/bootstrap-server.sh
-```
-
 `install-k3s.sh` installs a dual-stack K3s with Traefik/ServiceLB disabled
 and the NodePort range narrowed to `3200-4000` (see IMPLEMENTATION_PLAN.md's
 NodePort decision for why the full `3200-8799` originally requested isn't
 used). `bootstrap-server.sh` creates `/srv/cca/...` and the `cca` group that
 gives the runner read access to `/etc/rancher/k3s/k3s.yaml`.
 
-**Log the runner user out and back in (or reboot)** after this so the new
-group membership takes effect.
+**Option A - via the self-hosted runner (CCA Bootstrap Host workflow).**
+Requires passwordless `sudo` for the runner's OS user, scoped to just these
+two scripts. Add a line like this to `/etc/sudoers.d/cca-bootstrap` (via
+`sudo visudo -f /etc/sudoers.d/cca-bootstrap`), substituting the runner's
+actual work directory (typically
+`/home/<runner_user>/actions-runner/_work/cca-infra/cca-infra`, but check
+your actual install path):
+
+```
+<runner_user> ALL=(root) NOPASSWD: /home/<runner_user>/actions-runner/_work/cca-infra/cca-infra/scripts/install-k3s.sh, /home/<runner_user>/actions-runner/_work/cca-infra/cca-infra/scripts/bootstrap-server.sh
+```
+
+(Less scoped but simpler for a single-purpose home-lab runner: grant that
+user broad passwordless `sudo` instead, if you're comfortable with that
+trade-off on this box.)
+
+Then run the **CCA Bootstrap Host** workflow from the Actions tab, with
+`runner_user` set to that same OS user.
+
+**Option B - directly over SSH**, if you'd rather not grant the runner any
+`sudo` access:
+
+```bash
+sudo ./scripts/install-k3s.sh
+sudo RUNNER_USER=<the user the GitHub Actions runner will run as> ./scripts/bootstrap-server.sh
+```
+
+**Either way: restart the runner service (or log its user out and back in,
+or reboot) before continuing to step 3/5/6.** `bootstrap-server.sh` adds the
+runner's OS user to the `cca` group, but a process's group memberships are
+fixed at start time - the runner process needs a fresh start to pick up
+read access to `/etc/rancher/k3s/k3s.yaml`, or every later workflow
+(`CCA Platform`, `CCA Deploy`, `CCA Ops`) will fail trying to read it.
 
 ## 3. Self-hosted runner
 
