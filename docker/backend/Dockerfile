@@ -23,6 +23,8 @@
 
 FROM golang:1.19-alpine AS builder
 
+# Unpinned deliberately - see the runtime stage's identical note below.
+# hadolint ignore=DL3018
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
@@ -62,6 +64,12 @@ FROM alpine:3.20
 # in-cluster debugging. The `ffprobe -version` line is a build-time assertion,
 # not decoration - it fails the image build if the package didn't actually
 # provide ffprobe.
+# Unpinned deliberately: Alpine's package repos rotate quickly enough that a
+# pinned version routinely 404s within weeks, trading a hypothetical
+# reproducibility gain for a very real "the base image build breaks on its
+# own" failure mode. Rebuilds already get a fresh, immutable image tag either
+# way (see IMPLEMENTATION_PLAN.md's versioning scheme).
+# hadolint ignore=DL3018
 RUN apk add --no-cache ffmpeg curl ca-certificates tzdata \
     && ffprobe -version >/dev/null \
     && addgroup -S -g 10001 app \
@@ -84,7 +92,10 @@ RUN mkdir -p /web_app/env \
     && mkdir -p /web_app/uploads/private /web_app/uploads/public \
     && chown -R app:app /web_app
 
-USER app:app
+# Numeric UID:GID (not the "app" name) so this matches straightforwardly
+# against a Pod's securityContext.runAsUser if one is ever added, and so it
+# resolves the same way regardless of whether /etc/passwd is even readable.
+USER 10001:10001
 
 # SERVER_PORT has no code default (configs.EnvConfigs.SERVER_PORT is parsed from
 # os.Getenv("SERVER_PORT") with strconv.ParseInt; an unset/invalid value becomes

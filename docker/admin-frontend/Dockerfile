@@ -21,6 +21,8 @@ FROM node:16-alpine AS builder
 # python3/make/g++ cover any node-gyp native rebuilds among CRA4's transitive
 # deps (there's no committed node-sass here, but keeping this avoids surprise
 # failures from anything else in the dependency tree that does need to compile).
+# Unpinned deliberately - see docker/backend/Dockerfile's identical note.
+# hadolint ignore=DL3018
 RUN apk add --no-cache git python3 make g++
 
 WORKDIR /app

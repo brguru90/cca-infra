@@ -1,0 +1,61 @@
+# Day-2 operations (stop/restart/status/scale) - a thin shim over
+# scripts/ops.sh so it also works by hand on the server if GitHub is
+# unreachable. Separate from deploy.yml deliberately: this workflow needs no
+# `contents`/`packages` write access (least privilege), and its own
+# concurrency group shares the same string as deploy.yml so a `stop` can
+# never race a `deploy` against the same environment.
+
+name: CCA Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Action
+        required: true
+        type: choice
+        options: [status, stop, restart, scale]
+      environment:
+        description: Environment
+        required: true
+        type: choice
+        options: [integration, uat, production]
+      region:
+        description: Region
+        required: true
+        default: asia-india
+        type: choice
+        options: [asia-india]
+      component:
+        description: Component (scale requires backend or admin-frontend, not all)
+        required: false
+        type: choice
+        default: all
+        options: [all, backend, admin-frontend]
+      replicas:
+        description: Target replica count (scale only)
+        required: false
+        type: string
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cca-${{ inputs.region }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    runs-on: [self-hosted, linux]
+    # production stop/restart/scale is as much an outage risk as a bad
+    # deploy - gate it the same way (required reviewer, see docs/RUNBOOK.md
+    # for configuring the production GitHub Environment).
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run scripts/ops.sh
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: ./scripts/ops.sh "${{ inputs.action }}" "${{ inputs.environment }}" "${{ inputs.component }}" "${{ inputs.replicas }}"

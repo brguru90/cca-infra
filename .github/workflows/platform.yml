@@ -1,0 +1,53 @@
+# Applies terraform/platform - the MongoDB Community Operator and
+# Loki/Alloy/Grafana observability stack - once, cluster-wide. Must succeed
+# at least once BEFORE the very first terraform/app apply for any
+# environment: terraform/app/mongodb.tf's kubernetes_manifest resource
+# validates against the MongoDBCommunity CRD at plan time, which only
+# exists once this workflow has installed the operator.
+#
+# Re-running this workflow after the first time is safe (Terraform's usual
+# idempotency) and is how you bump chart versions in
+# terraform/platform/variables.tf.
+
+name: CCA Platform
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cca-platform
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: [self-hosted, linux]
+    environment: platform
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Apply platform secrets
+        env:
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+        run: ./scripts/apply-secrets.sh platform
+
+      - name: Terraform apply
+        run: |
+          set -euo pipefail
+          export TF_DATA_DIR="/srv/cca/tfdata/platform"
+          terraform -chdir=terraform/platform init -reconfigure -lock-timeout=5m \
+            -backend-config="path=/srv/cca/state/platform/terraform.tfstate"
+          terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m
+
+      - name: Verify Metrics Server and MongoDBCommunity CRD
+        run: |
+          set -euo pipefail
+          kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}{"\n"}'
+          kubectl get crd mongodbcommunity.mongodbcommunity.mongodb.com
+          echo "Grafana: $(terraform -chdir=terraform/platform output -raw grafana_url 2>/dev/null || echo 'see terraform output grafana_url')"
