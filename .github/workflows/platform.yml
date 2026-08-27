@@ -47,12 +47,22 @@ jobs:
           df -i
 
       - name: Terraform apply
+        # -parallelism=1: root-caused a real failure here to this - Terraform
+        # applies all 4 helm_release resources (mongodb operator, loki,
+        # alloy, grafana) in parallel by default, and this home connection
+        # can't reliably sustain that many simultaneous multi-MB chart
+        # downloads from release-assets.githubusercontent.com at once (two
+        # consecutive runs each failed "Error locating chart ... context
+        # deadline exceeded" on a DIFFERENT pair of charts, which is the
+        # signature of self-inflicted bandwidth contention, not a code bug).
+        # Serializing costs a bit of wall-clock time on a one-shot platform
+        # apply - a fine trade for reliability here.
         run: |
           set -euo pipefail
           export TF_DATA_DIR="/srv/cca/tfdata/platform"
           terraform -chdir=terraform/platform init -reconfigure -lock-timeout=5m \
             -backend-config="path=/srv/cca/state/platform/terraform.tfstate"
-          terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m 2>&1 | tee /srv/cca/tfdata/platform-apply-debug.log
+          terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m -parallelism=1 2>&1 | tee /srv/cca/tfdata/platform-apply-debug.log
 
       - name: Show captured apply log (always, even on failure)
         if: always()
