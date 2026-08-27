@@ -1,0 +1,50 @@
+# Thin shim over scripts/restore-state.sh - recovers an environment's
+# Terraform state from a known-good backup after state loss or corruption.
+# Shares deploy.yml/ops.yml's concurrency group so a restore can never race
+# a deploy or a stop/restart/scale against the same environment.
+#
+# This only restores the local state FILE - it deliberately does not run
+# `terraform plan`/`apply` itself. Run CCA Deploy (or `terraform plan`
+# directly on the server) right after, to confirm the restored state matches
+# the live cluster before applying anything.
+
+name: CCA Restore State
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        required: true
+        type: choice
+        options: [integration, uat, production]
+      region:
+        description: Region
+        required: true
+        default: asia-india
+        type: choice
+        options: [asia-india]
+      backup_file:
+        description: Backup filename under /srv/cca/state/<environment>/backups/ (not a full path). Defaults to the most recent backup.
+        required: false
+        type: string
+        default: latest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cca-${{ inputs.region }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: [self-hosted, linux]
+    # Same reasoning as ops.yml: restoring production's state is as much an
+    # outage risk as a bad deploy - gate it the same way.
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run scripts/restore-state.sh
+        run: ./scripts/restore-state.sh "${{ inputs.environment }}" "${{ inputs.backup_file }}"
