@@ -37,13 +37,30 @@ jobs:
           GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
         run: ./scripts/apply-secrets.sh platform
 
+      - name: Host diagnostics
+        run: |
+          echo "=== disk ==="
+          df -h
+          echo "=== memory ==="
+          free -h
+          echo "=== inodes ==="
+          df -i
+
       - name: Terraform apply
         run: |
           set -euo pipefail
           export TF_DATA_DIR="/srv/cca/tfdata/platform"
           terraform -chdir=terraform/platform init -reconfigure -lock-timeout=5m \
             -backend-config="path=/srv/cca/state/platform/terraform.tfstate"
-          terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m
+          terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m 2>&1 | tee /srv/cca/tfdata/platform-apply-debug.log
+
+      - name: Show captured apply log (always, even on failure)
+        if: always()
+        run: |
+          echo "=== last 200 lines of persisted apply log ==="
+          tail -n 200 /srv/cca/tfdata/platform-apply-debug.log || echo "log file not found"
+          echo "=== disk after apply ==="
+          df -h
 
       - name: Verify Metrics Server and MongoDBCommunity CRD
         run: |
