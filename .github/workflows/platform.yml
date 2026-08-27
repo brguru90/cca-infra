@@ -29,6 +29,12 @@ jobs:
       TF_IN_AUTOMATION: "1"
       TF_INPUT: "0"
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      # Job-level, not step-local: each `run:` step is a fresh shell, so an
+      # `export` inside one step (as this used to be, in "Terraform apply")
+      # doesn't carry over to later steps - the final verify step's
+      # `terraform output` call was silently failing and falling back to its
+      # placeholder text for exactly this reason. Fixed by hoisting it here.
+      TF_DATA_DIR: /srv/cca/tfdata/platform
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -94,7 +100,6 @@ jobs:
         # this home connection regardless.
         run: |
           set -euo pipefail
-          export TF_DATA_DIR="/srv/cca/tfdata/platform"
           terraform -chdir=terraform/platform init -reconfigure -lock-timeout=5m \
             -backend-config="path=/srv/cca/state/platform/terraform.tfstate"
           terraform -chdir=terraform/platform apply -auto-approve -lock-timeout=5m -parallelism=1 2>&1 | tee /srv/cca/tfdata/platform-apply-debug.log
