@@ -40,4 +40,18 @@ resource "kubernetes_persistent_volume_claim_v1" "backend_uploads" {
   # local-path does not support volume expansion - growing
   # backend_uploads_storage_size later requires manually deleting and
   # recreating this PVC (and its data), not a plain `terraform apply`.
+
+  # MUST be false: K3s's bundled local-path StorageClass uses
+  # volumeBindingMode: WaitForFirstConsumer - it won't provision/bind a
+  # volume until a Pod that actually mounts this PVC gets scheduled. The
+  # provider's default (wait_until_bound = true) makes Terraform block this
+  # resource's own create on reaching Bound, which deadlocks: the backend/
+  # backend-cron Deployments that would supply that consuming Pod are
+  # themselves ordered after this PVC (they reference its name), so nothing
+  # ever gets scheduled to unblock it. Hit this for real - the PVC create sat
+  # for 10 minutes before erroring, and backend/backend-cron never even
+  # started. Skipping the wait here is safe: Kubernetes itself still handles
+  # the real binding once the Deployment's Pod is scheduled - Terraform just
+  # doesn't need to sit and watch it happen.
+  wait_until_bound = false
 }

@@ -1,0 +1,59 @@
+# Ad-hoc, read-only cluster introspection - not part of the deploy/rollback/
+# platform pipelines. Exists so a stuck rollout (Deployment never reaching
+# Ready, PVC never Bound, etc.) can be diagnosed by inspecting live pods/
+# events/logs without re-running an entire build+deploy cycle just to see
+# what's wrong. Takes no cluster-mutating action.
+
+name: CCA Debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: Namespace to inspect
+        required: true
+        default: cca-integration
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, linux]
+    env:
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      NAMESPACE: ${{ inputs.namespace }}
+    steps:
+      - name: Cluster state
+        run: |
+          echo "=== pods (-o wide) ==="
+          kubectl get pods -n "$NAMESPACE" -o wide || true
+          echo "=== deployments ==="
+          kubectl get deployments -n "$NAMESPACE" -o wide || true
+          echo "=== pvc ==="
+          kubectl get pvc -n "$NAMESPACE" || true
+          echo "=== pv ==="
+          kubectl get pv || true
+          echo "=== storageclasses ==="
+          kubectl get storageclass || true
+          echo "=== configmaps ==="
+          kubectl get configmaps -n "$NAMESPACE" || true
+          echo "=== events (most recent last) ==="
+          kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp || true
+
+      - name: Describe and log every non-ready pod
+        run: |
+          set +e
+          for pod in $(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | awk '{
+            split($2,r,"/");
+            if ($3!="Running" || r[1]!=r[2]) print $1
+          }'); do
+            echo "--- describe $pod ---"
+            kubectl describe pod "$pod" -n "$NAMESPACE"
+            echo "--- logs $pod (all containers, last 200 lines) ---"
+            kubectl logs "$pod" -n "$NAMESPACE" --all-containers --tail=200
+            echo "--- previous logs $pod (if it restarted) ---"
+            kubectl logs "$pod" -n "$NAMESPACE" --all-containers --previous --tail=200 2>/dev/null
+          done
+          exit 0
