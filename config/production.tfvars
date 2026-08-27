@@ -15,5 +15,3 @@ admin_max_replicas   = 3
 # change here (see terraform/app/variables.tf's mongo_members validation and
 # IMPLEMENTATION_PLAN.md's MongoDB decision for why this isn't automatic).
 mongo_members = 1
-
-enable_video_worker = false

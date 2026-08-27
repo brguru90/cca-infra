@@ -23,6 +23,15 @@ Also tracked in git: `/env/.env`, `/env/.env_prod`, and
 is a **Firebase service-account private key**, which is a credential in the
 fullest sense (it can mint admin tokens against that Firebase project).
 
+Lower severity, but worth knowing about: `src/my_modules/google_cloud.go`
+hardcodes a real Google Cloud project ID, zone, and Compute Engine instance
+name (used to start/stop a VM for video processing - see
+IMPLEMENTATION_PLAN.md §14). This deployment never calls that code path
+successfully (no GCP credentials are configured here, so it fails cleanly
+and harmlessly - see §14), but the identifiers themselves are still exposed
+in a public repo. Not something this branch can fix without editing the
+submodule.
+
 **Rotation checklist** (do this before pointing `cca-infra` at real user
 data, not after):
 1. Rotate the MongoDB Atlas user's password; update the `MONGO_ADMIN_PASSWORD`

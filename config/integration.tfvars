@@ -16,5 +16,3 @@ admin_min_replicas   = 1
 admin_max_replicas   = 2
 
 mongo_members = 1
-
-enable_video_worker = false

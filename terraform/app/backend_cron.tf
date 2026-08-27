@@ -12,6 +12,36 @@
 # MongoDB Community Operator rather than a standalone mongod even at
 # members=1 - a standalone instance would make this Deployment silently never
 # fire.
+#
+# Deliberately singleton: replicas = 1 below, no HPA anywhere in this project
+# targets this Deployment. A second replica would double-run every cron.New()
+# schedule (ClearExpiredToken, VideoStreamGenerationCron - see
+# src/app_cron_jobs/init_cron_jobs.go) and duplicate change-stream handling.
+# Only `backend` (backend_api.tf) is ever HPA-scaled.
+#
+# `-micro_service video_processing` is NOT a Deployment (see backend_video
+# CronJob below for why) - it's a one-shot batch job: main.go's switch-case
+# calls app_cron_jobs.VideoStreamGeneration(true) directly and returns,
+# exiting the process once the queue drains. A Deployment would crash-loop
+# it forever for no benefit.
+#
+# It is reached WITHOUT going through VideoStreamGenerationCron() (the
+# function InitCronJobs schedules here, every minute) - that function is
+# what branches on APP_ENV to either process inline (development) or call
+# my_modules.StartVMInstance() to boot a hardcoded, project-specific Google
+# Compute Engine VM (production). This project's home server does not use
+# GCE at all (see backend_video below) - VideoStreamGeneration() itself has
+# no GCE code, so invoking it directly, on a schedule, sidesteps that branch
+# entirely and does real local ffmpeg encoding regardless of APP_ENV.
+#
+# That means this Deployment's own scheduled VideoStreamGenerationCron tick
+# will still occasionally attempt StartVMInstance() in production (whenever
+# it observes an unstarted queued video before backend_video's CronJob has
+# claimed it) - this fails harmlessly (compute.NewInstancesRESTClient errors
+# cleanly with no GCP credentials configured, wrapped and logged, never
+# fatal - see src/my_modules/google_cloud.go) and is left as-is rather than
+# patched, since suppressing it would require a submodule code change (a new
+# env-gated flag) that hasn't been confirmed - see IMPLEMENTATION_PLAN.md.
 
 resource "kubernetes_deployment_v1" "backend_cron" {
   metadata {
@@ -132,10 +162,18 @@ resource "kubernetes_deployment_v1" "backend_cron" {
   depends_on = [terraform_data.secrets_present]
 }
 
-# Optional -micro_service video_processing worker. Off by default
-# (var.enable_video_worker) - most environments don't need it, and it's the
-# same image/config shape as the cron worker with a different `args`.
-resource "kubernetes_deployment_v1" "backend_video" {
+# Real local video encoding, run entirely on this home server - never GCE.
+# A CronJob (not a Deployment) is the correct primitive here because
+# `-micro_service video_processing` is a one-shot batch process (see the
+# comment above `backend_cron`): it does whatever's queued, then exits 0.
+#
+# concurrency_policy = "Forbid" is what actually satisfies "only one
+# instance of video_processing should run" - Kubernetes will skip starting
+# a new Job if the previous one from this CronJob is still running, rather
+# than stacking overlapping ffmpeg encodes (each already spawns
+# runtime.NumCPU()*4 threads per src/my_modules/video_streaming.go - two of
+# those running at once on a single home server would thrash badly).
+resource "kubernetes_cron_job_v1" "backend_video" {
   count = var.enable_video_worker ? 1 : 0
 
   metadata {
@@ -145,90 +183,98 @@ resource "kubernetes_deployment_v1" "backend_video" {
   }
 
   spec {
-    replicas = 1
+    schedule                      = var.video_worker_schedule
+    concurrency_policy            = "Forbid"
+    successful_jobs_history_limit = 3
+    failed_jobs_history_limit     = 3
 
-    selector {
-      match_labels = { "app.kubernetes.io/name" = "backend-video" }
-    }
-
-    template {
+    job_template {
       metadata {
         labels = merge(local.common_labels, local.version_label, { "app.kubernetes.io/name" = "backend-video" })
       }
 
       spec {
-        init_container {
-          name    = local.wait_for_redis_init_container.name
-          image   = local.wait_for_redis_init_container.image
-          command = local.wait_for_redis_init_container.command
-        }
+        backoff_limit = 1 # per-video failures are logged and skipped internally, not something a Job retry fixes
 
-        container {
-          name  = "backend-video"
-          image = var.backend_image
-          args  = ["-micro_service", "video_processing"]
-
-          env_from {
-            config_map_ref {
-              name = kubernetes_config_map_v1.backend_env.metadata[0].name
-            }
+        template {
+          metadata {
+            labels = merge(local.common_labels, local.version_label, { "app.kubernetes.io/name" = "backend-video" })
           }
 
-          env_from {
-            secret_ref {
-              name = local.backend_secret_name
-            }
-          }
+          spec {
+            restart_policy = "Never"
 
-          env {
-            name = "MONGO_CUSTOM_URL"
-            value_from {
-              secret_key_ref {
-                name = local.mongo_connection_secret_name
-                key  = "connectionString.standard"
+            init_container {
+              name    = local.wait_for_redis_init_container.name
+              image   = local.wait_for_redis_init_container.image
+              command = local.wait_for_redis_init_container.command
+            }
+
+            container {
+              name  = "backend-video"
+              image = var.backend_image
+              args  = ["-micro_service", "video_processing"]
+
+              env_from {
+                config_map_ref {
+                  name = kubernetes_config_map_v1.backend_env.metadata[0].name
+                }
+              }
+
+              env_from {
+                secret_ref {
+                  name = local.backend_secret_name
+                }
+              }
+
+              env {
+                name = "MONGO_CUSTOM_URL"
+                value_from {
+                  secret_key_ref {
+                    name = local.mongo_connection_secret_name
+                    key  = "connectionString.standard"
+                  }
+                }
+              }
+
+              volume_mount {
+                name       = "firebase-sa"
+                mount_path = "/web_app/env/${local.firebase_json_filename}"
+                sub_path   = local.firebase_json_filename
+                read_only  = true
+              }
+
+              volume_mount {
+                name       = "uploads"
+                mount_path = "/web_app/uploads"
+              }
+
+              resources {
+                requests = {
+                  cpu    = "250m"
+                  memory = "256Mi"
+                }
+                limits = {
+                  cpu    = "1500m"
+                  memory = "1Gi"
+                }
               }
             }
-          }
 
-          volume_mount {
-            name       = "firebase-sa"
-            mount_path = "/web_app/env/${local.firebase_json_filename}"
-            sub_path   = local.firebase_json_filename
-            read_only  = true
-          }
-
-          # Shared with the API Deployment - see backend_api.tf and storage.tf.
-          # Load-bearing for this worker specifically: video processing reads
-          # and writes under the same upload paths.
-          volume_mount {
-            name       = "uploads"
-            mount_path = "/web_app/uploads"
-          }
-
-          resources {
-            requests = {
-              cpu    = "250m"
-              memory = "256Mi"
+            volume {
+              name = "firebase-sa"
+              secret {
+                secret_name  = local.firebase_secret_name
+                default_mode = "0444"
+              }
             }
-            limits = {
-              cpu    = "1500m"
-              memory = "1Gi"
+
+            volume {
+              name = "uploads"
+              persistent_volume_claim {
+                claim_name = kubernetes_persistent_volume_claim_v1.backend_uploads.metadata[0].name
+              }
             }
-          }
-        }
-
-        volume {
-          name = "firebase-sa"
-          secret {
-            secret_name  = local.firebase_secret_name
-            default_mode = "0444"
-          }
-        }
-
-        volume {
-          name = "uploads"
-          persistent_volume_claim {
-            claim_name = kubernetes_persistent_volume_claim_v1.backend_uploads.metadata[0].name
           }
         }
       }

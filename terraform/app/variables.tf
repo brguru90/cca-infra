@@ -127,6 +127,13 @@ variable "backend_uploads_storage_size" {
 
 variable "enable_video_worker" {
   type        = bool
-  description = "Whether to also deploy the -micro_service video_processing Deployment. Off by default; the cron worker (backend-cron) always deploys."
+  description = "Whether to run the -micro_service video_processing CronJob. Off by default - ffmpeg encoding (cpu_count*4 threads, per src/my_modules/video_streaming.go) is heavy on a single shared home server; enable per-environment once you're ready to test video uploads there."
   default     = false
 }
+
+variable "video_worker_schedule" {
+  type        = string
+  description = "Cron schedule for the video_processing CronJob (only used when enable_video_worker is true)."
+  default     = "*/5 * * * *"
+}
+

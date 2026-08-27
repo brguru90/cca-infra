@@ -18,6 +18,7 @@ repository's `initial_implementation` branch; see IMPLEMENTATION_PLAN.md §3.
 8. [Rollback](#8-rollback)
 9. [Demonstrating autoscaling](#9-demonstrating-autoscaling)
 10. [Troubleshooting](#10-troubleshooting)
+11. [Enabling video processing](#11-enabling-video-processing)
 
 ## 1. Prerequisites
 
@@ -157,3 +158,34 @@ don't expect Pods to disappear immediately after the load stops.
 - **Health check trips the circuit breaker and auto-rolls-back**: read the
   `deploy-terraform` job's log for `scripts/health-check.sh` - it prints
   exactly which checks failed and which version it rolled back to.
+
+## 11. Enabling video processing
+
+Off by default (`enable_video_worker = false` in every `config/*.tfvars`) -
+ffmpeg encoding spawns `runtime.NumCPU()*4` threads per run
+(`src/my_modules/video_streaming.go`), which is heavy for a single shared
+home server. To turn it on for an environment, set in that environment's
+`config/<env>.tfvars`:
+
+```hcl
+enable_video_worker   = true
+video_worker_schedule = "*/5 * * * *"   # tune to taste
+```
+
+This deploys `backend-video` as a Kubernetes **CronJob** (not a persistent
+Deployment - see IMPLEMENTATION_PLAN.md §14 for why), running
+`-micro_service video_processing` on that schedule with
+`concurrency_policy = Forbid`, so a run never overlaps the previous one.
+Real encoding happens on this server; nothing here calls out to Google
+Cloud. Check it with:
+
+```bash
+kubectl -n cca-<environment> get cronjob backend-video
+kubectl -n cca-<environment> get jobs -l app.kubernetes.io/name=backend-video
+kubectl -n cca-<environment> logs -l app.kubernetes.io/name=backend-video --tail=100
+```
+
+Expect to still occasionally see a logged (harmless) `StartVMInstance
+failed` error from `backend-cron`'s own scheduler - see
+IMPLEMENTATION_PLAN.md §14 for why that's expected and not a sign of
+anything broken.
