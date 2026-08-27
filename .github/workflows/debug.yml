@@ -24,7 +24,24 @@ jobs:
     env:
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       NAMESPACE: ${{ inputs.namespace }}
+      TF_DATA_DIR: /srv/cca/tfdata/${{ inputs.namespace == 'cca-integration' && 'integration' || (inputs.namespace == 'cca-uat' && 'uat' || 'production') }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Terraform state (read-only - no init/apply)
+        run: |
+          set +e
+          ENVIRONMENT="${NAMESPACE#cca-}"
+          echo "=== state file on disk ==="
+          ls -la "/srv/cca/state/${ENVIRONMENT}/" 2>&1
+          echo "=== state file backups (scripts/backup-state.sh keeps the last 20) ==="
+          ls -la "/srv/cca/state/${ENVIRONMENT}/backups/" 2>&1
+          echo "=== terraform state list (integration app root) ==="
+          terraform -chdir=terraform/app init -reconfigure -input=false -backend=true -lock=false \
+            -backend-config="path=/srv/cca/state/${ENVIRONMENT}/terraform.tfstate" 2>&1
+          terraform -chdir=terraform/app state list 2>&1
+          exit 0
+
       - name: Cluster state
         run: |
           echo "=== pods (-o wide) ==="
