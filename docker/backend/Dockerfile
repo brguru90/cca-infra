@@ -29,10 +29,21 @@ RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
 
-COPY go.mod ./
-# go.sum may not exist upstream (see note above) - COPY with a glob so the build
-# doesn't fail when it's absent, then branch on its presence.
-COPY go.sum* ./
+# Full source, not just go.mod/go.sum*, BEFORE the mod step: `go mod tidy`
+# has to analyze actual import statements to know what belongs in go.sum, so
+# it needs the .go files present, not just go.mod. Copying only go.mod first
+# (the usual Docker-cache-friendly split) left zero source files on disk at
+# that layer, so `go mod tidy` silently resolved nothing ("go: warning: 'all'
+# matched no packages") and go.sum came out missing entries the actual build
+# needed - `go build` then failed with a wall of "missing go.sum entry"
+# errors. Caught for real on the first live CCA Deploy run against this
+# image. This does forgo the classic "go.mod copied separately so dependency
+# downloads cache independently of source changes" optimization, but that
+# optimization doesn't apply here anyway while go.sum is absent upstream (see
+# note above) - once a companion PR lands committing go.sum, `go mod
+# download` below needs only go.mod+go.sum and works fine with source already
+# present in the build context regardless.
+COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     if [ -f go.sum ]; then \
@@ -42,8 +53,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       echo ">>> go.sum absent upstream: falling back to go mod tidy (non-reproducible, network required)"; \
       go mod tidy; \
     fi
-
-COPY . .
 
 ARG APP_VERSION=dev
 
