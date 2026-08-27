@@ -73,6 +73,12 @@ resource "kubernetes_deployment_v1" "backend_cron" {
             read_only  = true
           }
 
+          # Shared with the API Deployment - see backend_api.tf and storage.tf.
+          volume_mount {
+            name       = "uploads"
+            mount_path = "/web_app/uploads"
+          }
+
           resources {
             requests = {
               cpu    = "100m"
@@ -110,6 +116,13 @@ resource "kubernetes_deployment_v1" "backend_cron" {
           secret {
             secret_name  = local.firebase_secret_name
             default_mode = "0444"
+          }
+        }
+
+        volume {
+          name = "uploads"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim_v1.backend_uploads.metadata[0].name
           }
         }
       }
@@ -184,6 +197,14 @@ resource "kubernetes_deployment_v1" "backend_video" {
             read_only  = true
           }
 
+          # Shared with the API Deployment - see backend_api.tf and storage.tf.
+          # Load-bearing for this worker specifically: video processing reads
+          # and writes under the same upload paths.
+          volume_mount {
+            name       = "uploads"
+            mount_path = "/web_app/uploads"
+          }
+
           resources {
             requests = {
               cpu    = "250m"
@@ -201,6 +222,13 @@ resource "kubernetes_deployment_v1" "backend_video" {
           secret {
             secret_name  = local.firebase_secret_name
             default_mode = "0444"
+          }
+        }
+
+        volume {
+          name = "uploads"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim_v1.backend_uploads.metadata[0].name
           }
         }
       }

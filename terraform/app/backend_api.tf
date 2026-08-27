@@ -130,6 +130,15 @@ resource "kubernetes_deployment_v1" "backend" {
             read_only  = true
           }
 
+          # Persistent, shared across every backend/backend-cron/backend-video
+          # replica (see storage.tf for why ReadWriteOnce is safe here).
+          # Without this, PROTECTED_UPLOAD_PATH/UNPROTECTED_UPLOAD_PATH write
+          # to the container's ephemeral layer.
+          volume_mount {
+            name       = "uploads"
+            mount_path = "/web_app/uploads"
+          }
+
           resources {
             # Explicit requests are required for the HPA's CPU-utilization
             # target to resolve at all - a Deployment with no cpu request
@@ -198,6 +207,13 @@ resource "kubernetes_deployment_v1" "backend" {
           secret {
             secret_name  = local.firebase_secret_name
             default_mode = "0444"
+          }
+        }
+
+        volume {
+          name = "uploads"
+          persistent_volume_claim {
+            claim_name = kubernetes_persistent_volume_claim_v1.backend_uploads.metadata[0].name
           }
         }
       }

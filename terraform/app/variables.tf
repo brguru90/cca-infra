@@ -119,6 +119,12 @@ variable "mongo_version" {
 
 # --- Worker (backend-cron) ---------------------------------------------------
 
+variable "backend_uploads_storage_size" {
+  type        = string
+  description = "PVC size for cca_backend's upload paths (see storage.tf). local-path doesn't support online expansion, so grow this deliberately."
+  default     = "5Gi"
+}
+
 variable "enable_video_worker" {
   type        = bool
   description = "Whether to also deploy the -micro_service video_processing Deployment. Off by default; the cron worker (backend-cron) always deploys."

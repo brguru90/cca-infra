@@ -18,6 +18,7 @@ It exists so the *why* behind each file is legible without re-reading both plann
 10. [Git commit identity](#10-git-commit-identity)
 11. [Verification plan](#11-verification-plan)
 12. [Explicitly deferred](#12-explicitly-deferred)
+13. [Post-implementation alignment check](#13-post-implementation-alignment-check)
 
 ---
 
@@ -126,6 +127,7 @@ cca-infra/
 - **`terraform/app/backend_api.tf` / `backend_cron.tf`** — same image, different `args:` (`-micro_service api_server` vs `cron_job`); Redis-wait `init_container` on both; `lifecycle { ignore_changes = [spec[0].replicas] }` on the HPA-managed Deployment so Terraform never fights the HPA or reverts a manual `scale`/`stop`.
 - **`terraform/app/mongodb.tf`** — one `MongoDBCommunity` custom resource per namespace, `members = var.mongo_members` (default 1), explicit `connectionStringSecretName` pin so the backend's `secretKeyRef` target is stable and known.
 - **`terraform/app/preflight.tf`** — `data "external"` guard checking Secret *existence* (never values) before any Deployment references them; fails `terraform plan` in seconds with a clear message instead of a multi-minute rollout timeout.
+- **`terraform/app/storage.tf`** — a `local-path` PVC (`ReadWriteOnce`, safe here specifically because K3s is single-node) shared by `backend`/`backend-cron`/`backend-video` at `/web_app/uploads`, so `PROTECTED_UPLOAD_PATH`/`UNPROTECTED_UPLOAD_PATH` survive pod restarts and are visible across HPA-scaled replicas — added during the [§13](#13-post-implementation-alignment-check) alignment check, not part of the original implementation pass.
 - **`scripts/apply-secrets.sh`** — validates every required env var is set, then `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -` for backend secrets and the Firebase JSON (via `/dev/shm` + `shred`, never on disk longer than needed).
 - **`scripts/install-k3s.sh`** — dual-stack install flags, `--disable=traefik --disable=servicelb`, `--kube-apiserver-arg=service-node-port-range=3200-4000`, sysctls for IPv6 forwarding, kubeconfig group-readable for the runner user.
 - **`.github/workflows/deploy.yml`** — `prepare` (compute version + per-env ports) → parallel `build-backend` / `build-admin` / `build-flutter` → `deploy-terraform` (needs backend+admin only, **not** flutter — a Gradle flake shouldn't block a prod API deploy) → `post-verify`/`record-release`. Least-privilege permissions, environment-scoped concurrency group shared with `ops.yml`.
@@ -178,3 +180,21 @@ Since there's no reachable cluster from a plain repo checkout:
 - Opening a PR to `cca_backend` to commit `go.sum` (would make backend builds reproducible; the Dockerfile currently falls back to `go mod tidy` at build time).
 - Rotating the credentials hardcoded in `cca_backend` and `cca_admin_frontend`, and replacing the compromised Flutter keystore — documented in `docs/SECURITY.md`, none of it actioned.
 - Actually running `install-k3s.sh` / `terraform apply` on the physical server.
+
+## 13. Post-implementation alignment check
+
+After the initial implementation pass, did a line-by-line pass against `final-plan.md` to catch drift between what was designed and what actually got built. Two real findings, both resolved:
+
+- **Fixed: the Flutter APK was never actually published as a GitHub Release.** `final-plan.md` §11 requires this; `deploy.yml`'s own header comment described a `record-release` job doing it, but the job itself didn't exist — `build-flutter` stopped at `actions/upload-artifact`. Added the job: it attaches the APK (when built) and the server-recorded `manifest.json` to the git tag `deploy-terraform` already pushes, and degrades to manifest-only when Flutter was skipped or failed.
+- **Fixed: no persistent volume backed the backend's upload paths.** `PROTECTED_UPLOAD_PATH`/`UNPROTECTED_UPLOAD_PATH` wrote to the container's ephemeral layer — lost on restart, invisible across HPA-scaled replicas. Neither plan doc solved this in detail either (both deferred GCS integration), but the minimal fix — a `local-path` PVC, safe as `ReadWriteOnce` on this single-node cluster — was cheap enough to just do. See `terraform/app/storage.tf`.
+
+Everything else checked out as either aligned or an already-documented, session-approved deviation from the plan docs' literal text — listed here so "aligned" doesn't need re-litigating later:
+
+| final-plan.md said | This repo does | Why |
+|---|---|---|
+| NodePorts `8701`/`8702`/`8703` for backend, range `3200-8799` | Backend `3211`/`3311`/`3411`, range narrowed to `3200-4000` | The wider range swallows K3s's apiserver port `6443` and flannel's `8472` — see [§3 decisions table](#3-decisions-locked-in). |
+| Kubernetes Secrets managed directly by Terraform (§30's `kubernetes_secret` example) | Secrets applied via plain `kubectl` in `scripts/apply-secrets.sh`, referenced by name only | Keeps plaintext values out of `terraform.tfstate`. |
+| MongoDB/Redis left as external dependencies (inherited from `initial-plan.md` §59) | Both deployed in-cluster (Redis per namespace, MongoDB via the Community Operator) | Reading the actual backend source showed both are hard boot-time dependencies (Redis panics, Mongo change streams need a replica set) — easier to guarantee in-cluster than to depend on external services staying up. |
+| A single flat `terraform/` root | Split into `terraform/app` (per environment) and `terraform/platform` (cluster-wide, installs the Mongo operator + observability stack once) | Namespaced state per environment, and a clean place for the one-time cluster-wide installs `terraform/app` depends on. |
+| Version as a log label (§25, §31) | `cca_version` deliberately excluded from Loki's stream labels | Would mint a new log stream on every deploy and fragment the index — exposed as structured metadata instead. |
+| GitHub-hosted runner + SSH over IPv6 (§16-18's "Case B") | Self-hosted runner only, no SSH path at all | Matches the plan's own stated preference ("Case A") once a working runner was confirmed to exist — never built the SSH fallback. |
