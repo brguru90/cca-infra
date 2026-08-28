@@ -93,6 +93,29 @@ jobs:
           echo "${ipv4_addr} release-assets.githubusercontent.com" >> /etc/hosts
           getent hosts release-assets.githubusercontent.com
 
+      - name: Pre-pull and import the Headlamp image (bypass a live GHCR quirk)
+        # Real bug, caught live: kubelet's own pull of
+        # ghcr.io/headlamp-k8s/headlamp got a flat 403 Forbidden from
+        # ghcr.io's token endpoint - not a network failure, an actual
+        # (if apparently transient) authorization decision, since the exact
+        # same image/tag pulls fine with a plain anonymous token fetched
+        # from outside this network. Same class of issue already root-caused
+        # for this project's OWN images (see deploy.yml's "Import image into
+        # K3s containerd" step) - same fix: pull once via `docker` (which
+        # gets a fresh token attempt independent of whatever kubelet's own
+        # attempt hit) and import the result straight into containerd, so
+        # the Deployment's Pod never needs to pull it in-cluster at all.
+        run: |
+          set -euo pipefail
+          # Read the version straight out of variables.tf rather than
+          # duplicating it here as a literal - keeps this step from
+          # silently importing a stale image tag if that default is ever
+          # bumped without this step being updated to match.
+          version="$(grep -A3 'variable "headlamp_chart_version"' terraform/platform/variables.tf | grep default | sed -E 's/.*"([^"]+)".*/\1/')"
+          image="ghcr.io/headlamp-k8s/headlamp:v${version}"
+          docker pull "$image"
+          docker save "$image" | k3s ctr images import -
+
       - name: Terraform apply
         # -parallelism=1 alone did NOT fix the timeouts (see the previous
         # step's comment for the real root cause) - kept anyway since
