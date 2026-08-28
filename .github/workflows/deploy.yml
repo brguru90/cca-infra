@@ -163,6 +163,8 @@ jobs:
     if: needs.prepare.outputs.action == 'deploy'
     runs-on: [self-hosted, linux]
     environment: ${{ needs.prepare.outputs.environment }}
+    outputs:
+      backend_sha: ${{ steps.backend_sha.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -172,6 +174,15 @@ jobs:
           ref: main
           path: sources/cca_backend
           fetch-depth: 0
+
+      - name: Record the exact cca_backend commit this run built
+        # `ref: main` above checks out whatever main's HEAD is AT THAT
+        # MOMENT, not a pinned commit - record-release needs this exact SHA
+        # to check the same commit out again later and package it as a
+        # release asset, so the release always reflects what was actually
+        # built, not whatever main has drifted to by the time someone looks.
+        id: backend_sha
+        run: echo "sha=$(git -C sources/cca_backend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -217,6 +228,8 @@ jobs:
     if: needs.prepare.outputs.action == 'deploy'
     runs-on: [self-hosted, linux]
     environment: ${{ needs.prepare.outputs.environment }}
+    outputs:
+      admin_sha: ${{ steps.admin_sha.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -226,6 +239,10 @@ jobs:
           ref: main
           path: sources/cca_admin_frontend
           fetch-depth: 0
+
+      - name: Record the exact cca_admin_frontend commit this run built
+        id: admin_sha
+        run: echo "sha=$(git -C sources/cca_admin_frontend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -262,6 +279,8 @@ jobs:
       # names (ANDROID_HOME is the older/still-widely-checked alias).
       ANDROID_SDK_ROOT: /opt/android-sdk
       ANDROID_HOME: /opt/android-sdk
+    outputs:
+      frontend_sha: ${{ steps.frontend_sha.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -269,6 +288,10 @@ jobs:
           ref: main
           path: sources/cca_frontend
           fetch-depth: 0
+
+      - name: Record the exact cca_frontend commit this run built
+        id: frontend_sha
+        run: echo "sha=$(git -C sources/cca_frontend rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:
@@ -460,7 +483,7 @@ jobs:
           git push origin "$VERSION"
 
   record-release:
-    needs: [prepare, deploy-terraform, build-flutter]
+    needs: [prepare, deploy-terraform, build-backend, build-admin, build-flutter]
     if: |
       always() &&
       needs.prepare.outputs.action == 'deploy' &&
@@ -476,6 +499,54 @@ jobs:
         with:
           name: apk-${{ env.VERSION }}
           path: ${{ runner.temp }}/release-${{ env.VERSION }}
+
+      # GitHub's own auto-generated "Source code" zip/tarball for every
+      # release is close to useless here: it's this cca-infra repo alone,
+      # with every submodule showing up as an empty directory (git
+      # submodules aren't checked out in a plain archive export). What's
+      # actually useful for "what app code was live in this deployment" is
+      # each submodule's OWN source, at the EXACT commit that was built for
+      # THIS run - not whatever main has drifted to since. Fresh checkouts
+      # here, pinned to the SHA each build job recorded, rather than reusing
+      # those jobs' own working directories (self-hosted runners can persist
+      # _work across jobs, but relying on that undocumented behavior instead
+      # of an explicit pinned checkout would be fragile).
+      - name: Checkout cca_backend at the exact commit this run built
+        if: needs.build-backend.outputs.backend_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: brguru90/cca_backend
+          ref: ${{ needs.build-backend.outputs.backend_sha }}
+          path: release-sources/cca_backend
+
+      - name: Checkout cca_admin_frontend at the exact commit this run built
+        if: needs.build-admin.outputs.admin_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: brguru90/cca_admin_frontend
+          ref: ${{ needs.build-admin.outputs.admin_sha }}
+          path: release-sources/cca_admin_frontend
+
+      - name: Checkout cca_frontend at the exact commit this run built
+        if: needs.build-flutter.outputs.frontend_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: brguru90/cca_frontend
+          ref: ${{ needs.build-flutter.outputs.frontend_sha }}
+          path: release-sources/cca_frontend
+
+      - name: Archive each submodule's source as a separate release asset
+        run: |
+          set -euo pipefail
+          sources_dir="${{ runner.temp }}/release-sources-${VERSION}"
+          mkdir -p "$sources_dir"
+          for dir in cca_backend cca_admin_frontend cca_frontend; do
+            src="release-sources/${dir}"
+            if [[ -d "$src" ]]; then
+              tar czf "${sources_dir}/${dir}-${VERSION}.tar.gz" \
+                --exclude='.git' -C release-sources "$dir"
+            fi
+          done
 
       - name: Create GitHub Release with whatever assets exist
         env:
@@ -494,6 +565,11 @@ jobs:
             assets+=("$apk_dir"/*)
           else
             echo "::notice::No Flutter APK for ${VERSION} (skip_flutter was set, or that job failed/was skipped) - the release will only contain the deployment manifest."
+          fi
+
+          sources_dir="${{ runner.temp }}/release-sources-${VERSION}"
+          if [[ -d "$sources_dir" ]] && compgen -G "${sources_dir}/*" >/dev/null; then
+            assets+=("$sources_dir"/*)
           fi
 
           # deploy-terraform's prior step already created and pushed this
