@@ -80,8 +80,29 @@ jobs:
             echo "=== curl admin NodePort (127.0.0.1:${admin_port}/) ==="
             curl -v --max-time 5 "http://127.0.0.1:${admin_port}/" 2>&1
           fi
-          echo "=== iptables nat KUBE-NODEPORTS chain ==="
+          echo "=== iptables nat KUBE-NODEPORTS chain (IPv4) ==="
           sudo iptables -t nat -L KUBE-NODEPORTS -n 2>&1 || echo "chain not found (kube-proxy in ipvs mode, or not yet programmed)"
+          echo "=== ip6tables nat KUBE-NODEPORTS chain (IPv6) ==="
+          sudo ip6tables -t nat -L KUBE-NODEPORTS -n 2>&1 || echo "chain not found"
+          echo "=== node's real global IPv6 address(es) ==="
+          ip -6 addr show scope global
+          echo "=== backend Service spec (ipFamilies/clusterIPs) ==="
+          kubectl get svc backend -n "$NAMESPACE" -o jsonpath='{.spec.ipFamilies}{"\n"}{.spec.clusterIPs}{"\n"}{.spec.ipFamilyPolicy}{"\n"}' 2>/dev/null
+          echo "=== admin-frontend Service spec (ipFamilies/clusterIPs) ==="
+          kubectl get svc admin-frontend -n "$NAMESPACE" -o jsonpath='{.spec.ipFamilies}{"\n"}{.spec.clusterIPs}{"\n"}{.spec.ipFamilyPolicy}{"\n"}' 2>/dev/null
+          real_ipv6="$(ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n1)"
+          if [[ -n "$real_ipv6" ]]; then
+            if [[ -n "$backend_port" ]]; then
+              echo "=== curl backend over real IPv6 ([${real_ipv6}]:${backend_port}) ==="
+              curl -6 -v --max-time 5 "http://[${real_ipv6}]:${backend_port}/api/health_check" 2>&1
+            fi
+            if [[ -n "$admin_port" ]]; then
+              echo "=== curl admin-frontend over real IPv6 ([${real_ipv6}]:${admin_port}) ==="
+              curl -6 -v --max-time 5 "http://[${real_ipv6}]:${admin_port}/" 2>&1
+            fi
+          else
+            echo "no global-scope IPv6 address found on this host"
+          fi
           echo "=== k3s service status ==="
           sudo systemctl status k3s --no-pager 2>&1 | head -20
           exit 0
