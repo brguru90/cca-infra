@@ -90,6 +90,14 @@ jobs:
           kubectl get svc backend -n "$NAMESPACE" -o jsonpath='{.spec.ipFamilies}{"\n"}{.spec.clusterIPs}{"\n"}{.spec.ipFamilyPolicy}{"\n"}' 2>/dev/null
           echo "=== admin-frontend Service spec (ipFamilies/clusterIPs) ==="
           kubectl get svc admin-frontend -n "$NAMESPACE" -o jsonpath='{.spec.ipFamilies}{"\n"}{.spec.clusterIPs}{"\n"}{.spec.ipFamilyPolicy}{"\n"}' 2>/dev/null
+          echo "=== backend pod IPs (status.podIPs - both families if dual-stack CNI actually assigned both) ==="
+          kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=backend -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.podIPs}{"\n"}{end}' 2>/dev/null
+          echo "=== admin-frontend pod IPs (status.podIPs) ==="
+          kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=admin-frontend -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.podIPs}{"\n"}{end}' 2>/dev/null
+          echo "=== backend EndpointSlices ==="
+          kubectl get endpointslices -n "$NAMESPACE" -l kubernetes.io/service-name=backend -o wide 2>/dev/null
+          echo "=== admin-frontend EndpointSlices ==="
+          kubectl get endpointslices -n "$NAMESPACE" -l kubernetes.io/service-name=admin-frontend -o wide 2>/dev/null
           real_ipv6="$(ip -6 addr show scope global | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n1)"
           if [[ -n "$real_ipv6" ]]; then
             if [[ -n "$backend_port" ]]; then
