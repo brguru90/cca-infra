@@ -105,8 +105,19 @@ jobs:
         # gets a fresh token attempt independent of whatever kubelet's own
         # attempt hit) and import the result straight into containerd, so
         # the Deployment's Pod never needs to pull it in-cluster at all.
+        #
+        # `docker logout` first, deliberately: this runner's shared Docker
+        # daemon still has stored ghcr.io credentials from deploy.yml's own
+        # "Login to GHCR" step (a per-run GITHUB_TOKEN, scoped only to
+        # brguru90/cca-infra and long expired by the time this workflow
+        # runs). Docker tries stored credentials for a host before falling
+        # back to anonymous, so pulling a public image from an unrelated org
+        # on the SAME registry host got rejected outright ("denied: denied")
+        # instead of just working anonymously - caught live on the first
+        # real run of this step.
         run: |
           set -euo pipefail
+          docker logout ghcr.io || true
           # Read the version straight out of variables.tf rather than
           # duplicating it here as a literal - keeps this step from
           # silently importing a stale image tag if that default is ever
