@@ -6,6 +6,10 @@ output "grafana_url" {
   value = "http://<server-address>:${var.grafana_node_port}/"
 }
 
+output "headlamp_url" {
+  value = "http://<server-address>:${var.headlamp_node_port}/"
+}
+
 output "mongo_operator_release" {
   value = helm_release.mongodb_operator.name
 }

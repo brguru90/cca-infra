@@ -148,9 +148,27 @@ jobs:
           printf '%s' "$GRAFANA_ADMIN_PASSWORD" | kubectl exec -i "$pod" -n cca-monitoring -- \
             /usr/share/grafana/bin/grafana cli admin reset-admin-password --password-from-stdin
 
+      - name: Print a fresh Headlamp login token
+        # Headlamp's `serviceAccount`/`clusterRoleBinding` (headlamp.tf) give
+        # it a "view" (read-only) identity, but logging IN as that identity
+        # still needs a bearer token pasted into the UI - the chart doesn't
+        # generate or print one itself. `kubectl create token` mints a fresh
+        # one every run rather than relying on a long-lived static Secret
+        # token (the old pre-1.24 default, and a real credential worth NOT
+        # leaving lying around indefinitely) - a 10-year duration is
+        # practically permanent for a home-lab tool without actually being a
+        # non-expiring credential, and re-running this workflow gets you a
+        # new one instantly if you ever want to invalidate the old one.
+        run: |
+          set -euo pipefail
+          pod="$(kubectl get pods -n cca-monitoring -l app.kubernetes.io/name=headlamp -o jsonpath='{.items[0].metadata.name}')"
+          kubectl wait --for=condition=Ready "pod/${pod}" -n cca-monitoring --timeout=120s
+          echo "::notice title=Headlamp login token::$(kubectl create token headlamp -n cca-monitoring --duration=87600h)"
+
       - name: Verify Metrics Server and MongoDBCommunity CRD
         run: |
           set -euo pipefail
           kubectl get apiservice v1beta1.metrics.k8s.io -o jsonpath='{.status.conditions[?(@.type=="Available")].status}{"\n"}'
           kubectl get crd mongodbcommunity.mongodbcommunity.mongodb.com
           echo "Grafana: $(terraform -chdir=terraform/platform output -raw grafana_url 2>/dev/null || echo 'see terraform output grafana_url')"
+          echo "Headlamp: $(terraform -chdir=terraform/platform output -raw headlamp_url 2>/dev/null || echo 'see terraform output headlamp_url') (paste the token from the previous step's notice annotation to log in)"
