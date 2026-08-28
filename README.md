@@ -50,6 +50,7 @@ pins its `nodePort` explicitly; none are left to the allocator.
 | Platform service (cluster-wide, one instance) | Port |
 |---|---|
 | Grafana | 3900 |
+| Headlamp (read-only Kubernetes state viewer - see [docs/RUNBOOK.md §14](docs/RUNBOOK.md#14-accessing-headlamp)) | 3901 |
 
 `backend-cron`/`backend-video` have no NodePort - they're internal
 workers with no HTTP traffic routed to them (see `terraform/app/backend_cron.tf`).

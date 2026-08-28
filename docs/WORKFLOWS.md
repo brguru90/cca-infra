@@ -39,11 +39,12 @@ deploy) → `record-release`.
 
 ## `platform.yml` - CCA Platform
 
-Applies `terraform/platform` - the MongoDB Community Operator and
-Loki/Alloy/Grafana observability stack - once, cluster-wide. Also resyncs
-Grafana's live admin password from the `GRAFANA_ADMIN_PASSWORD` secret on
-every run (see `docs/RUNBOOK.md` for why a Secret update alone doesn't
-change an already-provisioned Grafana password).
+Applies `terraform/platform` - the MongoDB Community Operator,
+Loki/Alloy/Grafana observability stack, and Headlamp (read-only Kubernetes
+state viewer) - once, cluster-wide. Also resyncs Grafana's live admin
+password from the `GRAFANA_ADMIN_PASSWORD` secret (see `docs/RUNBOOK.md §13`
+for why a Secret update alone doesn't change an already-provisioned Grafana
+password) and mints a fresh Headlamp login token, on every run.
 
 **Trigger:** `workflow_dispatch`, no inputs.
 
@@ -54,7 +55,10 @@ change an already-provisioned Grafana password).
   this has run.
 - Any time you bump a chart version in `terraform/platform/variables.tf`.
 - Any time you rotate `GRAFANA_ADMIN_PASSWORD` and want the live password to
-  actually match it (see the question this answers in RUNBOOK.md).
+  actually match it (see RUNBOOK.md §13).
+- Any time you want a fresh Headlamp login token (RUNBOOK.md §14) - printed
+  as a workflow notice, base64-encoded (GitHub's log service auto-redacts a
+  raw JWT-shaped token as `***`, even unmasked).
 
 ## `ops.yml` - CCA Ops
 

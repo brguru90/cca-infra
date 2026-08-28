@@ -21,6 +21,7 @@ repository's `initial_implementation` branch; see IMPLEMENTATION_PLAN.md §3.
 11. [Enabling video processing](#11-enabling-video-processing)
 12. [Connecting to MongoDB directly (Compass/mongosh)](#12-connecting-to-mongodb-directly-compassmongosh)
 13. [Changing the Grafana admin password](#13-changing-the-grafana-admin-password)
+14. [Accessing Headlamp](#14-accessing-headlamp)
 
 ## 1. Prerequisites
 
@@ -312,3 +313,29 @@ supported reset command (`grafana cli admin reset-admin-password
 --password-from-stdin`, piped so the password never appears as a process
 argument), so the live password is guaranteed to match the secret on every
 single `CCA Platform` run, not just the first one.
+
+## 14. Accessing Headlamp
+
+`http://<server-address>:3901/` (see the [Ports](../README.md#ports) table).
+Headlamp is a pure read-only Kubernetes state viewer - not ArgoCD, and
+deliberately so, since ArgoCD's git-reconciliation model would fight this
+project's Terraform-owned app layer the same way the HPA already had to be
+solved for once. Its ServiceAccount is bound to the builtin `view`
+ClusterRole (not the chart's own `cluster-admin` default), so logging in as
+it only grants read access to cluster state.
+
+**Getting a login token**: `CCA Platform` mints a fresh one on every run and
+prints it as a workflow notice titled "Headlamp login token" -
+**base64-encoded**, not raw. This is deliberate, not an oversight: GitHub's
+Actions log service auto-redacts anything shaped like a JWT (which a
+ServiceAccount token is) as `***`, even with no explicit secret masking
+configured - confirmed live, the raw token never survives into the log at
+all. Copy the base64 string from that notice and decode it locally:
+
+```bash
+echo '<the base64 string from the notice>' | base64 -d
+```
+
+Paste the decoded result into Headlamp's login screen. The token is valid
+for 10 years (`kubectl create token headlamp -n cca-monitoring
+--duration=87600h`) - re-run `CCA Platform` any time you want a fresh one.

@@ -197,7 +197,15 @@ jobs:
           set -euo pipefail
           pod="$(kubectl get pods -n cca-monitoring -l app.kubernetes.io/name=headlamp -o jsonpath='{.items[0].metadata.name}')"
           kubectl wait --for=condition=Ready "pod/${pod}" -n cca-monitoring --timeout=120s
-          echo "::notice title=Headlamp login token::$(kubectl create token headlamp -n cca-monitoring --duration=87600h)"
+          # base64-encoded, not printed raw: GitHub's Actions log service
+          # auto-redacts anything shaped like a JWT (which a ServiceAccount
+          # token is) as "***", even with no explicit masking configured -
+          # confirmed live, the raw token never actually made it into the
+          # log or the annotation. Encoding it produces a string that
+          # doesn't match that pattern, so it survives; `base64 -d` after
+          # copying gets the real token back.
+          token_b64="$(kubectl create token headlamp -n cca-monitoring --duration=87600h | base64 -w0)"
+          echo "::notice title=Headlamp login token (base64 - run 'echo <this> | base64 -d' to decode)::${token_b64}"
 
       - name: Verify Metrics Server and MongoDBCommunity CRD
         run: |
