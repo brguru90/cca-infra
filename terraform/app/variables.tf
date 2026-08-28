@@ -51,6 +51,11 @@ variable "admin_node_port" {
   description = "NodePort for the admin-frontend Service. integration=3202, uat=3302, production=3402."
 }
 
+variable "mongo_node_port" {
+  type        = number
+  description = "NodePort for direct external MongoDB access (Compass/mongosh debugging). integration=3213, uat=3313, production=3413. SCRAM auth is already required (mongodb.tf) - this only adds network reachability, not a new credential. See docs/RUNBOOK.md for the directConnection=true caveat (single-member replica set)."
+}
+
 variable "backend_container_port" {
   type        = number
   description = "Port the backend process listens on inside the container (SERVER_PORT). Same across all environments; only the NodePort differs."

@@ -151,3 +151,44 @@ resource "kubernetes_manifest" "mongodb" {
     kubernetes_role_binding_v1.mongodb_database,
   ]
 }
+
+# External access for debugging with MongoDB Compass/mongosh from outside
+# the cluster. Deliberately a SEPARATE Service, not a change to the
+# operator-generated "cca-mongodb-svc" headless Service (that one is owned
+# and reconciled by the MongoDB Community Operator itself, not Terraform -
+# editing it here would fight the operator on every reconcile). Kubernetes
+# allows multiple Services to target the same Pods via an identical
+# selector, so this is additive and doesn't touch the operator's own
+# resource at all. Selector value verified directly against the live
+# cluster's actual headless Service, not assumed.
+#
+# SCRAM auth (this file's `security.authentication.modes`) already gates
+# every connection - this Service only adds network reachability, not a new
+# credential. Still, a database port reachable from the public internet is
+# a materially different risk than the app's own HTTP NodePorts: database
+# ports are common scan/brute-force targets, and this reuses the same
+# single password as backend API access. Accepted trade-off for a
+# home-lab/debugging use case - see docs/RUNBOOK.md for the connection
+# string (directConnection=true is required - see that doc for why).
+resource "kubernetes_service_v1" "mongodb_external" {
+  metadata {
+    name      = "cca-mongodb-external"
+    namespace = local.namespace
+    labels    = local.common_labels
+  }
+
+  spec {
+    selector = { app = "cca-mongodb-svc" }
+
+    ip_family_policy = "RequireDualStack"
+    ip_families      = ["IPv4", "IPv6"]
+
+    type = "NodePort"
+
+    port {
+      port        = 27017
+      target_port = 27017
+      node_port   = var.mongo_node_port
+    }
+  }
+}

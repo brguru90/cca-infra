@@ -5,6 +5,7 @@ region      = "asia-india"
 
 backend_node_port = 3411
 admin_node_port   = 3402
+mongo_node_port   = 3413
 
 backend_min_replicas = 2
 backend_max_replicas = 4

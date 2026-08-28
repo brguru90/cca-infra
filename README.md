@@ -16,6 +16,8 @@ triggered from the Actions tab.
   changed the original design. Read this first.
 - **[docs/RUNBOOK.md](docs/RUNBOOK.md)** - step-by-step: bare server to a
   working deploy, plus day-2 operations, rollback, and troubleshooting.
+- **[docs/WORKFLOWS.md](docs/WORKFLOWS.md)** - what each GitHub Actions
+  workflow does, when it triggers, and what its inputs mean.
 - **[docs/SECURITY.md](docs/SECURITY.md)** - credential findings in the app
   repos and their rotation checklists (not fixed by this repo - see below).
 - **[docs/AWS_MAPPING.md](docs/AWS_MAPPING.md)** - what each piece here
@@ -43,6 +45,7 @@ pins its `nodePort` explicitly; none are left to the allocator.
 |---|---|---|---|
 | Backend API (`GET /api/health_check`) | 3211 | 3311 | 3411 |
 | Admin frontend | 3202 | 3302 | 3402 |
+| MongoDB (Compass/mongosh debugging - see [docs/RUNBOOK.md §12](docs/RUNBOOK.md#12-connecting-to-mongodb-directly-compassmongosh)) | 3213 | 3313 | 3413 |
 
 | Platform service (cluster-wide, one instance) | Port |
 |---|---|

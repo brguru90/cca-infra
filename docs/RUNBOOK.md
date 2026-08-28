@@ -19,6 +19,8 @@ repository's `initial_implementation` branch; see IMPLEMENTATION_PLAN.md §3.
 9. [Demonstrating autoscaling](#9-demonstrating-autoscaling)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Enabling video processing](#11-enabling-video-processing)
+12. [Connecting to MongoDB directly (Compass/mongosh)](#12-connecting-to-mongodb-directly-compassmongosh)
+13. [Changing the Grafana admin password](#13-changing-the-grafana-admin-password)
 
 ## 1. Prerequisites
 
@@ -254,3 +256,59 @@ Expect to still occasionally see a logged (harmless) `StartVMInstance
 failed` error from `backend-cron`'s own scheduler - see
 IMPLEMENTATION_PLAN.md §14 for why that's expected and not a sign of
 anything broken.
+
+## 12. Connecting to MongoDB directly (Compass/mongosh)
+
+`terraform/app/mongodb.tf` exposes a dedicated NodePort Service
+(`cca-mongodb-external`, port `var.mongo_node_port` -
+3213/3313/3413 for integration/uat/production) for exactly this. It's a
+Terraform-owned Service separate from the operator-generated
+`cca-mongodb-svc` headless Service, targeting the same pod via an identical
+selector - the operator's own Service is left alone.
+
+**Security note before using this**: SCRAM auth is already required, but a
+database port reachable from the public internet is a materially different
+risk than the app's HTTP NodePorts - database ports are common scan/
+brute-force targets, and this reuses the same password as backend API
+access. This is a reasonable trade-off for a home-lab debugging workflow;
+weigh it yourself for anything more exposed.
+
+**Credentials**: username `cca_backend`, password is whatever
+`MONGO_ADMIN_PASSWORD` was set to for that environment (despite the name,
+this is the one and only app-level Mongo user Terraform creates - see
+`terraform/app/mongodb.tf`'s `users` block - not a separate cluster-admin
+account). Database name is `cca`.
+
+**Connection string** - note `directConnection=true`, which is *required*,
+not optional:
+
+```
+mongodb://cca_backend:<password>@<server-address>:<mongo_node_port>/cca?directConnection=true
+```
+
+Why `directConnection=true` matters: this is a real (if minimal,
+`mongo_members=1`) MongoDB replica set, not a standalone `mongod`. Without
+that flag, Compass/the driver does normal replica-set discovery - it
+connects once via the NodePort, then the server's own `hello`/`isMaster`
+response tells it the replica set member's real address is the
+Kubernetes-internal DNS name
+(`cca-mongodb-0.cca-mongodb-svc.cca-<environment>.svc.cluster.local`),
+which your desktop cannot resolve, and the connection fails right after
+that first handshake. `directConnection=true` tells the driver to skip
+discovery and treat this as a single fixed connection, which is exactly
+correct for a 1-member replica set.
+
+## 13. Changing the Grafana admin password
+
+Update the `GRAFANA_ADMIN_PASSWORD` secret in the `platform` GitHub
+Environment, then run **CCA Platform**. Its own Terraform apply is *not*
+enough by itself: Grafana's `admin.existingSecret` (`grafana.tf`) only sets
+the admin password on the very first database initialization - with
+`persistence.enabled = true`, a Secret update plus a pod restart does
+nothing once an admin user already exists (Grafana just keeps whatever's in
+its own persisted database). `platform.yml` therefore runs a dedicated step
+after every apply that execs into the Grafana pod and runs the chart's own
+supported reset command (`grafana cli admin reset-admin-password
+--password-from-stdin`, piped so the password never appears as a process
+argument), so the live password is guaranteed to match the secret on every
+single `CCA Platform` run, not just the first one.
