@@ -63,8 +63,20 @@ jobs:
             echo "Installing helm..."
             curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           fi
+          if ! command -v gh >/dev/null 2>&1; then
+            # NOT gpg --dearmor here (unlike terraform's key above) - GitHub
+            # ships this keyring already in binary format, per the official
+            # install instructions (cli.github.com/packages/...). Dearmoring
+            # an already-binary file corrupts it.
+            echo "Installing gh (GitHub CLI) - deploy.yml's record-release job needs it..."
+            wget -qO /usr/share/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+            apt-get update -y
+            apt-get install -y gh
+          fi
           terraform version
           helm version
+          gh version
 
       - name: Install K3s (idempotent - no-ops if already installed)
         run: sudo ./scripts/install-k3s.sh
