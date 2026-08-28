@@ -32,6 +32,25 @@ triggered from the Actions tab.
   and committed without access to the actual home server - see
   IMPLEMENTATION_PLAN.md §3 for exactly what that does and doesn't mean.
 
+## Ports
+
+Every Service is a K3s `NodePort` (range narrowed to `3200-4000` by
+`install-k3s.sh`, clear of the apiserver's `6443` and flannel's `8472`) -
+reachable at `http://<server-address>:<port>` once deployed. Each Service
+pins its `nodePort` explicitly; none are left to the allocator.
+
+| Service | integration | uat | production |
+|---|---|---|---|
+| Backend API (`GET /api/health_check`) | 3211 | 3311 | 3411 |
+| Admin frontend | 3202 | 3302 | 3402 |
+
+| Platform service (cluster-wide, one instance) | Port |
+|---|---|
+| Grafana | 3900 |
+
+`backend-cron`/`backend-video` have no NodePort - they're internal
+workers with no HTTP traffic routed to them (see `terraform/app/backend_cron.tf`).
+
 ## Repository layout
 
 ```
