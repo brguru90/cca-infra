@@ -90,8 +90,16 @@ jobs:
         # real license prompt would hang forever in CI).
         run: |
           set -euo pipefail
+          # `|| true`: this host has an unrelated third-party apt source
+          # (packagecloud.io/ookla/speedtest-cli) that 404s on its Release
+          # file - apt-get update fails hard on ANY configured repo being
+          # broken, even one nothing here uses. Tolerating that failure and
+          # letting the actual `apt-get install` calls below be the real
+          # gate (they still fail loudly if unzip/java genuinely can't be
+          # found in Ubuntu's own archives) is more robust than this step
+          # breaking every time an unrelated PPA on the host has a bad day.
           if ! command -v unzip >/dev/null 2>&1; then
-            apt-get update -y
+            apt-get update -y || true
             apt-get install -y unzip
           fi
           if ! command -v java >/dev/null 2>&1; then
@@ -99,7 +107,7 @@ jobs:
             # independent of the specific JDK (Temurin 11) that
             # actions/setup-java provides per-job for the actual Gradle/AGP
             # build in deploy.yml's build-flutter job.
-            apt-get update -y
+            apt-get update -y || true
             apt-get install -y default-jre-headless
           fi
           sdk_root=/opt/android-sdk
