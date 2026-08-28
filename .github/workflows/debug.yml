@@ -81,12 +81,12 @@ jobs:
           sudo systemctl status k3s --no-pager 2>&1 | head -20
           echo "=== /etc/hosts (localhost resolution) ==="
           grep -i localhost /etc/hosts
-          echo "=== exact health-check.sh curl_families()/check_once() reproduction ==="
+          echo "=== exact health-check.sh curl_families()/check_once() reproduction (literal loopback addresses) ==="
           if [[ -n "$backend_port" ]]; then
-            echo "-- curl -4 http://localhost:${backend_port}/api/health_check --"
-            curl -4 -v --max-time 5 "http://localhost:${backend_port}/api/health_check" 2>&1
-            echo "-- curl -6 http://localhost:${backend_port}/api/health_check --"
-            curl -6 -v --max-time 5 "http://localhost:${backend_port}/api/health_check" 2>&1
+            echo "-- curl http://127.0.0.1:${backend_port}/api/health_check --"
+            curl -v --max-time 5 "http://127.0.0.1:${backend_port}/api/health_check" 2>&1
+            echo "-- curl http://[::1]:${backend_port}/api/health_check --"
+            curl -v --max-time 5 "http://[::1]:${backend_port}/api/health_check" 2>&1
           fi
           exit 0
 

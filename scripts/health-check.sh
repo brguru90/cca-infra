@@ -54,45 +54,52 @@ releases_dir="${RELEASES_DIR:-/srv/cca/releases}"
 attempts="${HEALTH_CHECK_ATTEMPTS:-24}"
 delay_seconds="${HEALTH_CHECK_DELAY:-5}"
 
-# curl -4 always; -6 only attempted if the host actually has IPv6 configured,
-# so this script behaves the same in CI dry-runs (no IPv6) as it does on the
-# real dual-stack server.
+# 127.0.0.1 always; ::1 only checked if the host actually has IPv6
+# configured, so this script behaves the same in CI dry-runs (no IPv6) as it
+# does on the real dual-stack server.
+#
+# Explicit loopback LITERALS, not a curl -4/-6 flag against a shared
+# hostname - two real bugs hit live before landing on this:
+#   1. curl -6 against the literal "127.0.0.1" can never succeed (there's no
+#      way to reach an IPv4 literal over IPv6) - curl_families() always
+#      included -6 on this dual-stack host, so every -6 check failed
+#      unconditionally.
+#   2. Switching to the hostname "localhost" didn't fix it either: this
+#      distro's /etc/hosts maps ::1 to "ip6-localhost"/"ip6-loopback", NOT
+#      "localhost" (a real, common Debian/Ubuntu convention, not universal)
+#      - curl -6 http://localhost found no IPv6 address for that name at all
+#        and failed immediately.
+# run_health_checks() requires every family to pass, so either bug alone
+# permanently failed this script regardless of the application's actual
+# health. Literal addresses sidestep hostname resolution entirely - each
+# one unambiguously forces the matching IP version, no /etc/hosts or DNS
+# behavior to depend on.
 curl_families() {
-  local families=(-4)
+  local families=(127.0.0.1)
   if command -v ip >/dev/null 2>&1 && ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
-    families+=(-6)
+    families+=("[::1]")
   fi
   printf '%s\n' "${families[@]}"
 }
 
 check_once() {
-  local family="$1"
-  # "localhost", NOT the literal "127.0.0.1" - a real bug hit live: curl -6
-  # against a literal IPv4 address can never succeed (there is no such thing
-  # as reaching an IPv4 literal over IPv6), so on this dual-stack host (which
-  # always has a global-scope IPv6 address, hence curl_families() always
-  # includes -6) every single -6 check failed unconditionally, and
-  # run_health_checks requires ALL families to pass - this permanently
-  # failed health-check.sh regardless of the application's actual health.
-  # "localhost" resolves to both 127.0.0.1 and ::1 via /etc/hosts, so -4/-6
-  # each get the loopback address that actually matches.
-  #
+  local host="$1"
   # User-Agent is sent for log clarity, not because anything currently
   # requires it - see terraform/app/backend_api.tf's probe comments.
-  curl "$family" --fail --silent --show-error --max-time 5 \
+  curl --fail --silent --show-error --max-time 5 \
     -A "cca-health-check/1 (${environment})" \
-    "http://localhost:${backend_port}/api/health_check" >/dev/null \
-    && curl "$family" --fail --silent --show-error --max-time 5 \
+    "http://${host}:${backend_port}/api/health_check" >/dev/null \
+    && curl --fail --silent --show-error --max-time 5 \
     -A "cca-health-check/1 (${environment})" \
-    "http://localhost:${admin_port}/" >/dev/null
+    "http://${host}:${admin_port}/" >/dev/null
 }
 
 run_health_checks() {
   local ok=0
   for attempt in $(seq 1 "$attempts"); do
     local all_families_ok=1
-    while read -r family; do
-      if ! check_once "$family"; then
+    while read -r host; do
+      if ! check_once "$host"; then
         all_families_ok=0
         break
       fi
