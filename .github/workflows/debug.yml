@@ -59,6 +59,28 @@ jobs:
           echo "=== events (most recent last) ==="
           kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp || true
 
+      - name: NodePort connectivity (health-check.sh hits these over 127.0.0.1)
+        run: |
+          set +e
+          echo "=== services ==="
+          kubectl get svc -n "$NAMESPACE" -o wide
+          backend_port="$(kubectl get svc backend -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)"
+          admin_port="$(kubectl get svc admin-frontend -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)"
+          echo "backend nodePort=${backend_port:-<none>} admin nodePort=${admin_port:-<none>}"
+          if [[ -n "$backend_port" ]]; then
+            echo "=== curl backend NodePort (127.0.0.1:${backend_port}/api/health_check) ==="
+            curl -v --max-time 5 "http://127.0.0.1:${backend_port}/api/health_check" 2>&1
+          fi
+          if [[ -n "$admin_port" ]]; then
+            echo "=== curl admin NodePort (127.0.0.1:${admin_port}/) ==="
+            curl -v --max-time 5 "http://127.0.0.1:${admin_port}/" 2>&1
+          fi
+          echo "=== iptables nat KUBE-NODEPORTS chain ==="
+          sudo iptables -t nat -L KUBE-NODEPORTS -n 2>&1 || echo "chain not found (kube-proxy in ipvs mode, or not yet programmed)"
+          echo "=== k3s service status ==="
+          sudo systemctl status k3s --no-pager 2>&1 | head -20
+          exit 0
+
       - name: Describe and log every non-ready or ever-restarted pod
         run: |
           set +e
