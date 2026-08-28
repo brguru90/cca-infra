@@ -67,14 +67,24 @@ curl_families() {
 
 check_once() {
   local family="$1"
+  # "localhost", NOT the literal "127.0.0.1" - a real bug hit live: curl -6
+  # against a literal IPv4 address can never succeed (there is no such thing
+  # as reaching an IPv4 literal over IPv6), so on this dual-stack host (which
+  # always has a global-scope IPv6 address, hence curl_families() always
+  # includes -6) every single -6 check failed unconditionally, and
+  # run_health_checks requires ALL families to pass - this permanently
+  # failed health-check.sh regardless of the application's actual health.
+  # "localhost" resolves to both 127.0.0.1 and ::1 via /etc/hosts, so -4/-6
+  # each get the loopback address that actually matches.
+  #
   # User-Agent is sent for log clarity, not because anything currently
   # requires it - see terraform/app/backend_api.tf's probe comments.
   curl "$family" --fail --silent --show-error --max-time 5 \
     -A "cca-health-check/1 (${environment})" \
-    "http://127.0.0.1:${backend_port}/api/health_check" >/dev/null \
+    "http://localhost:${backend_port}/api/health_check" >/dev/null \
     && curl "$family" --fail --silent --show-error --max-time 5 \
     -A "cca-health-check/1 (${environment})" \
-    "http://127.0.0.1:${admin_port}/" >/dev/null
+    "http://localhost:${admin_port}/" >/dev/null
 }
 
 run_health_checks() {

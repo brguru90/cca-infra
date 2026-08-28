@@ -79,6 +79,15 @@ jobs:
           sudo iptables -t nat -L KUBE-NODEPORTS -n 2>&1 || echo "chain not found (kube-proxy in ipvs mode, or not yet programmed)"
           echo "=== k3s service status ==="
           sudo systemctl status k3s --no-pager 2>&1 | head -20
+          echo "=== /etc/hosts (localhost resolution) ==="
+          grep -i localhost /etc/hosts
+          echo "=== exact health-check.sh curl_families()/check_once() reproduction ==="
+          if [[ -n "$backend_port" ]]; then
+            echo "-- curl -4 http://localhost:${backend_port}/api/health_check --"
+            curl -4 -v --max-time 5 "http://localhost:${backend_port}/api/health_check" 2>&1
+            echo "-- curl -6 http://localhost:${backend_port}/api/health_check --"
+            curl -6 -v --max-time 5 "http://localhost:${backend_port}/api/health_check" 2>&1
+          fi
           exit 0
 
       - name: Describe and log every non-ready or ever-restarted pod
