@@ -143,27 +143,35 @@ resource "kubernetes_deployment_v1" "backend_cron" {
             }
           }
 
-          # An HTTP endpoint technically exists now (see the header comment -
-          # this runs main.go's `default` case), but nothing routes traffic
-          # to it, so an HTTP probe here would only prove the listener is up,
-          # not that this Pod's actual job (cron schedules, change-stream
-          # watching) is healthy. A `pgrep`-style exec probe would similarly
-          # only confirm the process hasn't exited, which is
-          # already what Kubernetes' default restartPolicy: Always covers -
-          # it wouldn't detect an actually-hung worker, just add a second
-          # restart trigger for the same failure mode. Instead this is
-          # honestly framed as a DEPENDENCY probe, not a health probe: if
-          # Redis becomes unreachable after startup, the app's own
-          # log.Panic will already have crashed the process, so in practice
-          # this rarely fires - it exists as a second line of defense with a
-          # generous period so it doesn't mask a real crash loop behind
-          # constant restarts.
+          # Originally an exec probe running `redis-cli -h redis ... ping`,
+          # framed as a DEPENDENCY check rather than a real health probe.
+          # Real bug, caught live: `redis-cli` is only present in the
+          # wait-redis INIT container's image (redis:7-alpine) - the actual
+          # cca-backend runtime image (docker/backend/Dockerfile, Alpine +
+          # ffmpeg/curl) never installs it. Every single liveness check
+          # failed with "sh: redis-cli: not found", so this container
+          # crash-looped roughly every 3 minutes for 13+ hours (150+
+          # restarts) despite the application itself being perfectly
+          # healthy the entire time.
+          #
+          # An HTTP endpoint genuinely exists now (see the header comment -
+          # this runs main.go's `default` case) and nothing else uses it, so
+          # this switches to the same httpGet health check backend_api.tf
+          # uses - it needs no extra binary, and checking the app's own
+          # /api/health_check is a more meaningful signal than a Redis
+          # dependency probe anyway.
           liveness_probe {
-            exec {
-              command = ["sh", "-c", "redis-cli -h redis -p 6379 ping | grep -q PONG"]
+            http_get {
+              path = "/api/health_check"
+              port = var.backend_container_port
+              http_header {
+                name  = "User-Agent"
+                value = "kube-probe/cca"
+              }
             }
             initial_delay_seconds = 30
             period_seconds        = 60
+            timeout_seconds       = 3
             failure_threshold     = 3
           }
         }
