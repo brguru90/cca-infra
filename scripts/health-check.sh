@@ -41,7 +41,17 @@ case "$environment" in
 esac
 
 releases_dir="${RELEASES_DIR:-/srv/cca/releases}"
-attempts="${HEALTH_CHECK_ATTEMPTS:-10}"
+# 10 attempts * 5s (50s total) was not enough in practice: right after a
+# host reboot, `kubectl rollout status` (which already ran before this
+# script) confirms Pod readiness via the pod IP directly, but kube-proxy's
+# NodePort iptables DNAT rules can take noticeably longer than that to
+# finish rebuilding from scratch - curl got a flat "Couldn't connect to
+# server" against the NodePort for the full 50s even though the app was
+# actually healthy underneath (confirmed manually seconds after this
+# script gave up). 24 * 5s = 120s gives real cold-start headroom without
+# meaningfully slowing down the normal case, where it exits the moment the
+# first check passes.
+attempts="${HEALTH_CHECK_ATTEMPTS:-24}"
 delay_seconds="${HEALTH_CHECK_DELAY:-5}"
 
 # curl -4 always; -6 only attempted if the host actually has IPv6 configured,
