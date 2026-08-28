@@ -54,6 +54,22 @@ pins its `nodePort` explicitly; none are left to the allocator.
 `backend-cron`/`backend-video` have no NodePort - they're internal
 workers with no HTTP traffic routed to them (see `terraform/app/backend_cron.tf`).
 
+## Microservices
+
+Every backend workload runs from the **same** `cca-backend` image
+(`docker/backend/Dockerfile`) - the role is selected entirely by
+Kubernetes `args:`, not by separate images. See `terraform/app/backend_api.tf`
+/ `backend_cron.tf` for the exact `args:` and probe config behind each row.
+
+| Workload | Image role (`args:`) | Kind | Scaling | Notes |
+|---|---|---|---|---|
+| `backend` | `-micro_service api_server` | Deployment + Service (NodePort) | HPA, CPU-based (see `hpa.tf`) | The only backend workload with a Service/NodePort - serves `GET /api/health_check`, `/api/swagger`, and every `/api/...` route. |
+| `backend-cron` | *(no flag - falls through to `main.go`'s `default` case)* | Deployment, `replicas = 1`, never HPA'd | Fixed at 1 | Runs the MongoDB change-stream trigger and all scheduled jobs (token cleanup, `VideoStreamGenerationCron`). **Not** run via `-micro_service cron_job` - that dedicated code path has a real bug (starts its background work, then returns from `main()` immediately, killing it before anything fires) - see `backend_cron.tf`'s header comment. A second replica would double-run every scheduled job and duplicate change-stream handling, so this is deliberately never autoscaled. |
+| `backend-video` *(optional, `enable_video_worker`)* | `-micro_service video_processing` | CronJob, `concurrency_policy = Forbid` | N/A - one-shot per schedule tick | Off by default (`docs/RUNBOOK.md §11`). Real local `ffmpeg` encoding, never GCE - see IMPLEMENTATION_PLAN.md §14. |
+| `admin-frontend` | *(separate `cca-admin-frontend` image)* | Deployment + Service (NodePort) | HPA | nginx + a static React build; the ConfigMap-mounted nginx config (`kubernetes/nginx/admin-default.conf.tpl`) proxies `/api/` to `backend` - the image itself has no build-time API URL, so one image serves every environment. |
+| `redis` | `redis:7-alpine` (upstream image) | Deployment + Service (ClusterIP) | Fixed at 1 | In-cluster cache, no auth (the app's client hardcodes an empty password). Every backend workload has an `initContainer` that blocks until this is reachable, since the app hard-panics on boot if Redis isn't up. |
+| `cca-mongodb` | MongoDB Community Operator-managed | StatefulSet (via `MongoDBCommunity` CR) | `mongo_members` var, manual (not HPA - see IMPLEMENTATION_PLAN.md's MongoDB decision) | A real replica set even at `members=1` (a 1-member set), required for `backend-cron`'s change-stream watching to work at all - a standalone `mongod` would silently never fire it. |
+
 ## Repository layout
 
 ```
