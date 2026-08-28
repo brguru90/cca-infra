@@ -59,12 +59,17 @@ jobs:
           echo "=== events (most recent last) ==="
           kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp || true
 
-      - name: Describe and log every non-ready pod
+      - name: Describe and log every non-ready or ever-restarted pod
         run: |
           set +e
           for pod in $(kubectl get pods -n "$NAMESPACE" --no-headers 2>/dev/null | awk '{
             split($2,r,"/");
-            if ($3!="Running" || r[1]!=r[2]) print $1
+            # $4 is the restart count (e.g. "150" or "150 (6m27s ago)" -
+            # whitespace-splitting still isolates just the number here).
+            # A pod can be crash-looping and currently back up (Running,
+            # Ready) between crashes - restart count catches that even when
+            # the Running/Ready check alone would skip it.
+            if ($3!="Running" || r[1]!=r[2] || $4+0 > 0) print $1
           }'); do
             echo "--- describe $pod ---"
             kubectl describe pod "$pod" -n "$NAMESPACE"
