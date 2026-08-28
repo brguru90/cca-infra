@@ -275,6 +275,23 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Trust the cached Flutter SDK's git checkout
+        # Real bug, caught live: git flags the SDK checkout this action
+        # caches under _work/_tool/flutter/... as "dubious ownership" (its
+        # files predate the runner service running as root, or were laid
+        # down by a different process UID). Flutter's own tooling shells
+        # out to `git describe` on its SDK checkout to report its version;
+        # with that git command failing, it silently falls back to
+        # "0.0.0-unknown" - which then fails flutter_windowmanager's
+        # `sdk: >=1.10.0` constraint during `flutter pub get`, well before
+        # any of this project's own code is even touched.
+        # `*`, not one specific path: this runner already has root,
+        # cluster-admin kubeconfig, and the Docker socket (see this repo's
+        # own "third-party actions pinned to SHAs" paranoia elsewhere) -
+        # trusting every git directory it happens to touch is not a
+        # meaningfully bigger blast radius than what it already has.
+        run: git config --global --add safe.directory '*'
+
       - name: Configure Android signing
         working-directory: sources/cca_frontend/android
         run: |
