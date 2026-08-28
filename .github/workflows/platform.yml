@@ -125,6 +125,29 @@ jobs:
             kubectl logs "$pod" -n cca-monitoring --all-containers --tail=100 || true
           done
 
+      - name: Sync Grafana admin password with the current secret
+        # `admin.existingSecret` (grafana.tf) only sets the password on
+        # Grafana's very FIRST database initialization - since persistence
+        # is enabled, a pod restart alone does NOT pick up a changed
+        # GRAFANA_ADMIN_PASSWORD once an admin user already exists. This
+        # runs the chart's own supported reset path every time this
+        # workflow runs, so the live password always matches whatever the
+        # secret currently holds, first boot or the hundredth.
+        #
+        # The Grafana image is distroless (no shell - see grafana.tf's
+        # comment), so this execs the single `grafana` binary directly with
+        # its `cli` subcommand rather than a shell one-liner, and pipes the
+        # password over stdin (`--password-from-stdin`) so it never appears
+        # as a process argument.
+        env:
+          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          pod="$(kubectl get pods -n cca-monitoring -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].metadata.name}')"
+          kubectl wait --for=condition=Ready "pod/${pod}" -n cca-monitoring --timeout=120s
+          printf '%s' "$GRAFANA_ADMIN_PASSWORD" | kubectl exec -i "$pod" -n cca-monitoring -- \
+            /usr/share/grafana/bin/grafana cli admin reset-admin-password --password-from-stdin
+
       - name: Verify Metrics Server and MongoDBCommunity CRD
         run: |
           set -euo pipefail
