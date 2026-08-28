@@ -74,9 +74,23 @@ jobs:
             apt-get update -y
             apt-get install -y gh
           fi
+          if ! command -v mongosh >/dev/null 2>&1; then
+            # A plain tarball, not the apt repo (mongodb-org's apt repo is
+            # keyed to a specific Ubuntu codename, which needs constant
+            # upkeep as the OS is upgraded, for a tool this project only
+            # ever uses for ad-hoc debugging - see debug.yml's mongo
+            # connectivity check). Verified this exact URL/version resolves
+            # before adding it here.
+            echo "Installing mongosh (debug.yml's mongo connectivity check needs it)..."
+            curl -fsSL -o /tmp/mongosh.tgz https://downloads.mongodb.com/compass/mongosh-2.10.0-linux-x64.tgz
+            tar xzf /tmp/mongosh.tgz -C /tmp
+            cp /tmp/mongosh-2.10.0-linux-x64/bin/mongosh /usr/local/bin/mongosh
+            rm -rf /tmp/mongosh.tgz /tmp/mongosh-2.10.0-linux-x64
+          fi
           terraform version
           helm version
           gh version
+          mongosh --version
 
       - name: Install Android SDK (idempotent) - build-flutter needs it for `flutter build apk`
         # cca_frontend/android/app/build.gradle uses Flutter's own default

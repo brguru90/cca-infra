@@ -89,6 +89,20 @@ jobs:
             # other curl check in this file.
             echo "=== curl mongo NodePort (127.0.0.1:${mongo_port}) - only the TCP connect matters here ==="
             curl -v --max-time 5 "http://127.0.0.1:${mongo_port}/" 2>&1 | head -10
+
+            echo "=== real mongosh connection test (auth + wire protocol, not just TCP) ==="
+            mongo_password="$(kubectl get secret cca-mongo-user-password -n "$NAMESPACE" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)"
+            if [[ -n "$mongo_password" ]]; then
+              if command -v mongosh >/dev/null 2>&1; then
+                mongosh \
+                  "mongodb://cca_backend:${mongo_password}@127.0.0.1:${mongo_port}/cca?directConnection=true" \
+                  --quiet --eval 'db.runCommand({ping: 1})' 2>&1
+              else
+                echo "mongosh not installed on this runner host - re-run CCA Bootstrap Host to install it"
+              fi
+            else
+              echo "could not read cca-mongo-user-password - skipping mongosh test"
+            fi
           fi
           headlamp_port="$(kubectl get svc headlamp -n "$NAMESPACE" -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null)"
           if [[ -n "$headlamp_port" ]]; then
