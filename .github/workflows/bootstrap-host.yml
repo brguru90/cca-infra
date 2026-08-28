@@ -124,7 +124,16 @@ jobs:
             rm -f "$tmp_zip"
           fi
           export ANDROID_SDK_ROOT="$sdk_root"
-          yes | "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          # `|| true`: sdkmanager exits after consuming a finite number of
+          # license confirmations, but `yes` keeps writing - the SIGPIPE it
+          # gets when sdkmanager stops reading makes `yes` itself report a
+          # non-zero "Broken pipe" exit, which `pipefail` would otherwise
+          # treat as this whole step failing even though licenses were
+          # actually accepted fine (confirmed live: this is exactly what
+          # happened here). Any REAL license-acceptance failure still
+          # surfaces on its own at the next line, when sdkmanager tries to
+          # install packages it doesn't yet have a license for.
+          yes | "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" \
             "platform-tools" "platforms;android-33" "build-tools;33.0.2"
           chmod -R a+rX "$sdk_root"
