@@ -42,12 +42,6 @@ jobs:
           terraform -chdir=terraform/app state list 2>&1
           exit 0
 
-      - name: TEMPORARY - print the live cca-mongo-user-password value
-        run: |
-          set +e
-          kubectl get secret cca-mongo-user-password -n "$NAMESPACE" -o jsonpath='{.data.password}' | base64 -d
-          echo
-
       - name: Cluster state
         run: |
           echo "=== pods (-o wide) ==="
