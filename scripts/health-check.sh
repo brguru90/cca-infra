@@ -54,58 +54,40 @@ releases_dir="${RELEASES_DIR:-/srv/cca/releases}"
 attempts="${HEALTH_CHECK_ATTEMPTS:-24}"
 delay_seconds="${HEALTH_CHECK_DELAY:-5}"
 
-# 127.0.0.1 always; ::1 only checked if the host actually has IPv6
-# configured, so this script behaves the same in CI dry-runs (no IPv6) as it
-# does on the real dual-stack server.
-#
-# Explicit loopback LITERALS, not a curl -4/-6 flag against a shared
-# hostname - two real bugs hit live before landing on this:
+# IPv4 loopback only. This went through three attempts before landing here:
 #   1. curl -6 against the literal "127.0.0.1" can never succeed (there's no
-#      way to reach an IPv4 literal over IPv6) - curl_families() always
-#      included -6 on this dual-stack host, so every -6 check failed
+#      way to reach an IPv4 literal over IPv6) - the old curl_families()
+#      always added -6 on this dual-stack host, so that check failed
 #      unconditionally.
-#   2. Switching to the hostname "localhost" didn't fix it either: this
-#      distro's /etc/hosts maps ::1 to "ip6-localhost"/"ip6-loopback", NOT
-#      "localhost" (a real, common Debian/Ubuntu convention, not universal)
-#      - curl -6 http://localhost found no IPv6 address for that name at all
-#        and failed immediately.
-# run_health_checks() requires every family to pass, so either bug alone
-# permanently failed this script regardless of the application's actual
-# health. Literal addresses sidestep hostname resolution entirely - each
-# one unambiguously forces the matching IP version, no /etc/hosts or DNS
-# behavior to depend on.
-curl_families() {
-  local families=(127.0.0.1)
-  if command -v ip >/dev/null 2>&1 && ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
-    families+=("[::1]")
-  fi
-  printf '%s\n' "${families[@]}"
-}
-
+#   2. Switching to the hostname "localhost" didn't fix it: this distro's
+#      /etc/hosts maps ::1 to "ip6-localhost"/"ip6-loopback", NOT
+#      "localhost" - curl -6 http://localhost found no IPv6 address at all.
+#   3. Switching to the literal "[::1]" didn't fix it either - confirmed
+#      live that kube-proxy on this K3s setup does not bind NodePorts to the
+#      IPv6 loopback address at all, `RequireDualStack` on the Service
+#      notwithstanding. IPv4 loopback connects and returns 200 every time;
+#      IPv6 loopback fails to connect, period - not a flaky check, a
+#      permanently un-satisfiable one.
+# The actual goal here is "is the app I just deployed serving correctly",
+# which IPv4 loopback answers completely on its own. Verifying dual-stack
+# reachability for real would mean hitting the node's actual external IPv6
+# address, not its loopback - a different, heavier check, out of scope for
+# a same-host post-deploy smoke test.
 check_once() {
-  local host="$1"
   # User-Agent is sent for log clarity, not because anything currently
   # requires it - see terraform/app/backend_api.tf's probe comments.
   curl --fail --silent --show-error --max-time 5 \
     -A "cca-health-check/1 (${environment})" \
-    "http://${host}:${backend_port}/api/health_check" >/dev/null \
+    "http://127.0.0.1:${backend_port}/api/health_check" >/dev/null \
     && curl --fail --silent --show-error --max-time 5 \
     -A "cca-health-check/1 (${environment})" \
-    "http://${host}:${admin_port}/" >/dev/null
+    "http://127.0.0.1:${admin_port}/" >/dev/null
 }
 
 run_health_checks() {
   local ok=0
   for attempt in $(seq 1 "$attempts"); do
-    local all_families_ok=1
-    while read -r host; do
-      if ! check_once "$host"; then
-        all_families_ok=0
-        break
-      fi
-    done < <(curl_families)
-
-    if ((all_families_ok)); then
+    if check_once; then
       ok=1
       break
     fi

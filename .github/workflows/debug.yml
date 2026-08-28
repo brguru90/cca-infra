@@ -59,7 +59,12 @@ jobs:
           echo "=== events (most recent last) ==="
           kubectl get events -n "$NAMESPACE" --sort-by=.lastTimestamp || true
 
-      - name: NodePort connectivity (health-check.sh hits these over 127.0.0.1)
+      - name: NodePort connectivity (health-check.sh hits these over IPv4 loopback)
+        # IPv6 loopback ([::1]) is deliberately NOT checked here - confirmed
+        # live that kube-proxy on this K3s setup never binds NodePorts to
+        # it, RequireDualStack notwithstanding (see health-check.sh's
+        # check_once() comment). Testing it here would just reproduce a
+        # permanent, known false-negative, not surface anything new.
         run: |
           set +e
           echo "=== services ==="
@@ -79,15 +84,6 @@ jobs:
           sudo iptables -t nat -L KUBE-NODEPORTS -n 2>&1 || echo "chain not found (kube-proxy in ipvs mode, or not yet programmed)"
           echo "=== k3s service status ==="
           sudo systemctl status k3s --no-pager 2>&1 | head -20
-          echo "=== /etc/hosts (localhost resolution) ==="
-          grep -i localhost /etc/hosts
-          echo "=== exact health-check.sh curl_families()/check_once() reproduction (literal loopback addresses) ==="
-          if [[ -n "$backend_port" ]]; then
-            echo "-- curl http://127.0.0.1:${backend_port}/api/health_check --"
-            curl -v --max-time 5 "http://127.0.0.1:${backend_port}/api/health_check" 2>&1
-            echo "-- curl http://[::1]:${backend_port}/api/health_check --"
-            curl -v --max-time 5 "http://[::1]:${backend_port}/api/health_check" 2>&1
-          fi
           exit 0
 
       - name: Describe and log every non-ready or ever-restarted pod
