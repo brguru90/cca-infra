@@ -18,7 +18,20 @@ upstream backend_upstream {
 }
 
 server {
+  # Real bug, caught live: a bare `listen 80;` only binds nginx's IPv4
+  # wildcard socket - unlike Go's net/http (backend_api.tf's server), nginx
+  # does NOT implicitly dual-stack a plain port directive. The Service/
+  # EndpointSlice/ip6tables DNAT for this Pod's IPv6 address were all
+  # correctly wired (verified directly against the live cluster), but
+  # nginx itself was never listening on it - external IPv6 clients got a
+  # real kernel-level "Connection refused" on the Pod's own IPv6 address,
+  # not a network/routing failure. `ipv6only=off` in the SAME `[::]:80`
+  # listener would create one dual-stack socket, but K3s's dual-stack
+  # design here already gives each Pod distinct IPv4 and IPv6 addresses
+  # via separate EndpointSlices - two explicit listeners (one per address
+  # family) matches that model directly, rather than fighting it.
   listen 80;
+  listen [::]:80;
   server_name _;
 
   root /usr/share/nginx/html;
