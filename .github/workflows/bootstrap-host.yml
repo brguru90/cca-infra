@@ -78,6 +78,50 @@ jobs:
           helm version
           gh version
 
+      - name: Install Android SDK (idempotent) - build-flutter needs it for `flutter build apk`
+        # cca_frontend/android/app/build.gradle uses Flutter's own default
+        # compileSdkVersion (33 for Flutter 3.7.12) and AGP 7.2.0
+        # (android/build.gradle). Only platform-tools + platforms;android-33
+        # + one build-tools version are pre-installed here - AGP downloads
+        # any other exact SDK component it needs on its own during the
+        # actual Gradle build, as long as sdkmanager exists, ANDROID_SDK_ROOT
+        # is set (see deploy.yml's build-flutter job env), and licenses are
+        # already accepted (the `yes |` below, non-interactively, since a
+        # real license prompt would hang forever in CI).
+        run: |
+          set -euo pipefail
+          if ! command -v unzip >/dev/null 2>&1; then
+            apt-get update -y
+            apt-get install -y unzip
+          fi
+          if ! command -v java >/dev/null 2>&1; then
+            # sdkmanager itself just needs *a* working JRE to run - this is
+            # independent of the specific JDK (Temurin 11) that
+            # actions/setup-java provides per-job for the actual Gradle/AGP
+            # build in deploy.yml's build-flutter job.
+            apt-get update -y
+            apt-get install -y default-jre-headless
+          fi
+          sdk_root=/opt/android-sdk
+          if [[ ! -d "${sdk_root}/cmdline-tools/latest" ]]; then
+            echo "Installing Android cmdline-tools..."
+            mkdir -p "${sdk_root}/cmdline-tools"
+            tmp_zip="$(mktemp)"
+            curl -fsSL -o "$tmp_zip" "https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip"
+            unzip -q "$tmp_zip" -d "${sdk_root}/cmdline-tools"
+            # The zip's own top-level dir is "cmdline-tools" - sdkmanager
+            # expects to live under .../cmdline-tools/<some-name>/bin, so
+            # this becomes .../cmdline-tools/latest/bin as its docs require.
+            mv "${sdk_root}/cmdline-tools/cmdline-tools" "${sdk_root}/cmdline-tools/latest"
+            rm -f "$tmp_zip"
+          fi
+          export ANDROID_SDK_ROOT="$sdk_root"
+          yes | "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          chmod -R a+rX "$sdk_root"
+          "${sdk_root}/cmdline-tools/latest/bin/sdkmanager" --version
+
       - name: Install K3s (idempotent - no-ops if already installed)
         run: sudo ./scripts/install-k3s.sh
 

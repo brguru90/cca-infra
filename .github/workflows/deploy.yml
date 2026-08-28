@@ -256,6 +256,12 @@ jobs:
     if: needs.prepare.outputs.action == 'deploy' && !inputs.skip_flutter
     runs-on: [self-hosted, linux]
     environment: ${{ needs.prepare.outputs.environment }}
+    env:
+      # Installed by bootstrap-host.yml's "Install Android SDK" step -
+      # AGP/Gradle looks for the SDK at this path via these exact variable
+      # names (ANDROID_HOME is the older/still-widely-checked alias).
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      ANDROID_HOME: /opt/android-sdk
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
