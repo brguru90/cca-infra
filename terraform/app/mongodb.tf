@@ -96,6 +96,26 @@ resource "kubernetes_manifest" "mongodb" {
       type    = "ReplicaSet"
       version = var.mongo_version
 
+      # mongod's net.ipv6 defaults to false regardless of how the fronting
+      # Kubernetes Service is configured - cca-mongodb-external below is
+      # correctly dual-stack (RequireDualStack, both ipFamilies) and
+      # kube-proxy programs identical NAT rules for it on both families as
+      # the already-working backend/admin-frontend NodePorts, but without
+      # this, mongod itself never opens an IPv6 listening socket at all
+      # (confirmed live via `cat /proc/net/tcp6` inside the mongod
+      # container - zero entries), so every external IPv6 connection gets
+      # an immediate Connection refused from the pod itself, no matter how
+      # the Service/router/NAT layers are configured. net.ipv6 alone isn't
+      # enough either - per MongoDB's own docs it only permits IPv6, it
+      # doesn't bind any IPv6 address on its own - bindIpAll is what
+      # actually opens sockets on both 0.0.0.0 and ::.
+      additionalMongodConfig = {
+        net = {
+          ipv6      = true
+          bindIpAll = true
+        }
+      }
+
       security = {
         authentication = {
           modes = ["SCRAM"]
