@@ -30,7 +30,11 @@ repository's `initial_implementation` branch; see IMPLEMENTATION_PLAN.md §3.
 - Public IPv6 connectivity, with `travel-planner.ddns.net`'s DDNS updater
   configured to publish an **AAAA** record for this machine (an A record too,
   if you want IPv4 reachability as well - the cluster is dual-stack either
-  way).
+  way). Note that on a server sitting behind ISP CGNAT (no public IPv4 at
+  all, as is the case for the home server this runbook was written against),
+  the A record and any IPv4 port-forwarding are moot - external access to
+  every NodePort only ever works over IPv6, and the router's IPv6 firewall
+  must separately allow inbound TCP on each port you want reachable.
 - `terraform`, `kubectl`, `helm`, `jq`, `curl` installed on the host (verified
   by `scripts/bootstrap-server.sh`).
 
@@ -287,6 +291,12 @@ not optional:
 mongodb://cca_backend:<password>@<server-address>:<mongo_node_port>/cca?directConnection=true
 ```
 
+**No public IPv4**: this server has no public IPv4 address at all (CGNAT) -
+only its IPv6 address is externally reachable. Connecting from off-server
+requires an IPv6-capable client and network path, and the router's IPv6
+firewall must additionally allow inbound TCP on `mongo_node_port` (3213 for
+integration) - it isn't allowed by default just because other NodePorts are.
+
 Why `directConnection=true` matters: this is a real (if minimal,
 `mongo_members=1`) MongoDB replica set, not a standalone `mongod`. Without
 that flag, Compass/the driver does normal replica-set discovery - it
@@ -317,6 +327,9 @@ single `CCA Platform` run, not just the first one.
 ## 14. Accessing Headlamp
 
 `http://<server-address>:3901/` (see the [Ports](../README.md#ports) table).
+This server has no public IPv4 address (CGNAT) - only its IPv6 address is
+externally reachable, so connecting requires an IPv6-capable client/network,
+and the router's IPv6 firewall must additionally allow inbound TCP on 3901.
 Headlamp is a pure read-only Kubernetes state viewer - not ArgoCD, and
 deliberately so, since ArgoCD's git-reconciliation model would fight this
 project's Terraform-owned app layer the same way the HPA already had to be
