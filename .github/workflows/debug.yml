@@ -90,6 +90,12 @@ jobs:
             echo "=== curl mongo NodePort (127.0.0.1:${mongo_port}) - only the TCP connect matters here ==="
             curl -v --max-time 5 "http://127.0.0.1:${mongo_port}/" 2>&1 | head -10
 
+            echo "=== does mongod itself have an IPv6 listening socket? (net.ipv6 defaults to false in mongod - the NodePort Service can be perfectly dual-stack while mongod itself never opens a v6 socket at all) ==="
+            mongo_pod="$(kubectl get pods -n "$NAMESPACE" -l app=cca-mongodb-svc -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+            if [[ -n "$mongo_pod" ]]; then
+              echo "--- /proc/net/tcp6 inside ${mongo_pod} (a line ending :6989 = listening on 27017 over IPv6) ---"
+              kubectl exec -n "$NAMESPACE" "$mongo_pod" -c mongod -- cat /proc/net/tcp6 2>&1
+            fi
             echo "=== real mongosh connection test (auth + wire protocol, not just TCP) ==="
             mongo_password="$(kubectl get secret cca-mongo-user-password -n "$NAMESPACE" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)"
             if [[ -n "$mongo_password" ]]; then
