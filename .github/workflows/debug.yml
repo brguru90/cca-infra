@@ -28,6 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: TEMP - print cca-mongo-user-password (revert right after reading this)
+        run: |
+          kubectl get secret cca-mongo-user-password -n "$NAMESPACE" -o jsonpath='{.data.password}' | base64 -d
+          echo
+
       - name: Terraform state (read-only - no init/apply)
         run: |
           set +e
